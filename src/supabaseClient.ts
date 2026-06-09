@@ -1,8 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 
-// הכתובת החדשה שסיפקת
-const supabaseUrl = 'https://xibjmtdbhdwpzqmffohm.supabase.co';
-// המפתח שסיפקת
-const supabaseAnonKey = 'sb_publishable_7MDKG89k9gDyolyMXPMQHw_kZJNZ4l2';
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
