@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.REACT_APP_SUPABASE_URL;
-const supabaseAnonKey = process.env.REACT_APP_SUPABASE_ANON_KEY;
+const supabaseUrl = 'https://nepdwxbtaxtocafnpqli.supabase.co';
+const supabaseAnonKey = 'sb_publishable_kfLbUjPgcRXGnscbUenmGg_474wlIIw';
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
@@ -11,9 +11,8 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   }
 });
 
-export const ADMIN_EMAIL = process.env.REACT_APP_ADMIN_EMAIL;
-export const ADMIN_CODE = process.env.REACT_APP_ADMIN_CODE;
-
+export const ADMIN_EMAIL = 'E0556770172@gmail.com';
+export const ADMIN_CODE = 'A331870956';
 export const ROLE_LABELS = {
   level1: 'משתמש חדש',
   level2: 'מגיב מורשה',
