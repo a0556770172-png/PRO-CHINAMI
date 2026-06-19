@@ -612,13 +612,19 @@ export default function ChatPage() {
                   </div>
                 )}
 
-                {/* LTR context: flex-end=ימין(שלי), flex-start=שמאל(שלו) */}
+                {/* קונטיינר LTR פיזי: השורה עצמה תמיד ברוחב מלא, והמיקום (ימין/שמאל)
+                    נקבע עם margin:auto פיזי — לא תלוי בפרשנות flex-start/end,
+                    כך שהתנהגות עקבית בכל דפדפן ולא "מתהפכת". */}
                 <div style={{
                   display: 'flex',
                   flexDirection: 'row',
-                  justifyContent: isMine ? 'flex-end' : 'flex-start',
+                  width: '100%',
                   alignItems: 'flex-end',
                   gap: '0.4rem',
+                  // שלי (isMine) → דוחף את כל השורה לימין (marginLeft: auto)
+                  // שלו (!isMine) → נשאר בשמאל (marginRight: auto)
+                  marginLeft: isMine ? 'auto' : 0,
+                  marginRight: isMine ? 0 : 'auto',
                 }}>
                   {/* אווטאר — תמיד בצד הרחוק (שמאל עבור השני, לא מוצג עבורי) */}
                   {!isMine && (
@@ -637,8 +643,8 @@ export default function ChatPage() {
                     maxWidth: '72%',
                     padding: '0.5rem 0.85rem 0.35rem',
                     borderRadius: isMine
-                      ? '1.1rem 0.25rem 1.1rem 1.1rem'   // פינה תחתון-ימין שטוחה (ימין = שלי ב-RTL)
-                      : '0.25rem 1.1rem 1.1rem 1.1rem',  // פינה תחתון-שמאל שטוחה (שמאל = שלו)
+                      ? '1.1rem 1.1rem 0.25rem 1.1rem'   // פינה תחתון-ימין שטוחה (ימין = שלי)
+                      : '1.1rem 1.1rem 1.1rem 0.25rem',  // פינה תחתון-שמאל שטוחה (שמאל = שלו)
                     background: bubbleBg,
                     border: bubbleBorder,
                     color: bubbleColor,
@@ -701,7 +707,7 @@ export default function ChatPage() {
 
           {/* אינדיקטור הקלדה — תמיד משמאל (הצד השני) */}
           {otherTyping && (
-            <div style={{ display: 'flex', flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'flex-end', gap: '0.4rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-end', gap: '0.4rem', marginRight: 'auto', marginLeft: 0 }}>
               <div style={{
                 width: 28, height: 28, borderRadius: '50%', background: otherColor,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
