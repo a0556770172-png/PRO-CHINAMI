@@ -15,6 +15,8 @@ const ALLOWED_TYPES = {
   'application/zip': 'zip', 'application/x-zip-compressed': 'zip',
 };
 
+const EMOJI_OPTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+
 function fileTypeIcon(type) {
   if (type === 'image') return '🖼️';
   if (type === 'video') return '🎬';
@@ -29,12 +31,12 @@ function fileTypeIcon(type) {
 export function ChatsListPage() {
   const { user, profile } = useAuth();
   const navigate = useNavigate();
-  const [tab, setTab] = useState('users'); // 'chats' | 'users'
+  const [tab, setTab] = useState('users');
   const [chats, setChats] = useState([]);
   const [allUsers, setAllUsers] = useState([]);
   const [unread, setUnread] = useState({});
   const [loading, setLoading] = useState(true);
-  const [startingChat, setStartingChat] = useState(null); // userId שנפתח כרגע
+  const [startingChat, setStartingChat] = useState(null);
   const [search, setSearch] = useState('');
 
   const canUseChat = profile &&
@@ -45,6 +47,22 @@ export function ChatsListPage() {
     if (!canUseChat) return;
     loadAll();
   }, [user]);
+
+  useEffect(() => {
+    if (!user || !canUseChat) return;
+    const channel = supabase.channel('chats_list_realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_messages' }, () => {
+        loadChats();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chats' }, () => {
+        loadChats();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, canUseChat]);
 
   async function loadAll() {
     setLoading(true);
@@ -99,7 +117,6 @@ export function ChatsListPage() {
     navigate(`/chat/${chatId}`);
   }
 
-  // בדוק אם יכול לשלוח לפי ההרשאות (client-side, הDB גם מגן)
   function canSendTo(target) {
     const myRole = profile.role;
     const myLikes = profile.received_likes_count || 0;
@@ -140,7 +157,6 @@ export function ChatsListPage() {
     u.display_name?.toLowerCase().includes(search.toLowerCase())
   );
 
-  // קבץ משתמשים לפי תפקיד לתצוגה נוחה
   const roleOrder = ['admin', 'writer', 'level3', 'level2', 'level1'];
   const grouped = roleOrder.reduce((acc, role) => {
     const group = filteredUsers.filter(u => u.role === role);
@@ -161,7 +177,6 @@ export function ChatsListPage() {
       <div className="container" style={{ maxWidth: 700 }}>
         <h1 style={{ fontSize: '1.5rem', marginBottom: '1.25rem' }}>💬 צ'אט פרטי</h1>
 
-        {/* טאבים */}
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', borderBottom: '2px solid var(--border)', paddingBottom: '0' }}>
           {[
             { key: 'users', label: '👥 כל המשתמשים' },
@@ -185,7 +200,6 @@ export function ChatsListPage() {
           <div className="loading-page"><div className="spinner"></div></div>
         ) : tab === 'users' ? (
           <>
-            {/* חיפוש */}
             <input
               className="form-input"
               placeholder="🔍 חיפוש משתמש..."
@@ -251,7 +265,6 @@ export function ChatsListPage() {
             )}
           </>
         ) : (
-          /* טאב שיחות */
           chats.length === 0 ? (
             <div className="card" style={{ padding: '2rem', textAlign: 'center' }}>
               <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>💬</div>
@@ -316,6 +329,12 @@ export default function ChatPage() {
   const [text, setText] = useState('');
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
+  
+  // States חדשים לעריכה ותגובות
+  const [editingMsgId, setEditingMsgId] = useState(null);
+  const [editText, setEditText] = useState('');
+  const [activeReactionMenu, setActiveReactionMenu] = useState(null);
+
   const bottomRef = useRef(null);
   const fileInputRef = useRef(null);
   const channelRef = useRef(null);
@@ -325,7 +344,6 @@ export default function ChatPage() {
   const canUseChat = profile &&
     (profile.role === 'admin' || profile.role === 'writer' || (profile.received_likes_count || 0) >= 50);
 
-  // ── טעינת היסטוריה ──────────────────────────────────────
   const loadChat = useCallback(async () => {
     if (!user || !chatId) return;
     const { data: chatData } = await supabase
@@ -352,7 +370,6 @@ export default function ChatPage() {
       .order('created_at', { ascending: true });
     setMessages(msgs || []);
 
-    // סמן כנקראו
     await supabase
       .from('chat_messages')
       .update({ is_read: true })
@@ -361,7 +378,6 @@ export default function ChatPage() {
       .eq('is_read', false);
   }, [chatId, user, navigate]);
 
-  // ── Realtime: הודעות + Presence (אונליין + הקלדה) ────────
   useEffect(() => {
     if (!user || !chatId) return;
     if (!canUseChat) { navigate('/chats'); return; }
@@ -373,59 +389,50 @@ export default function ChatPage() {
     });
     channelRef.current = channel;
 
-    // הודעות חדשות מה-DB
-    channel.on('postgres_changes', {
-      event: 'INSERT', schema: 'public', table: 'chat_messages',
-      filter: `chat_id=eq.${chatId}`,
-    }, async (payload) => {
-      const msg = payload.new;
-      // אם ההודעה שלנו — כבר הוספנו אותה optimistically, רק נעדכן את ה-id האמיתי
-      setMessages(prev => {
-        const tempIdx = prev.findIndex(m => m._temp && m.content === msg.content && m.sender_id === msg.sender_id);
-        if (tempIdx !== -1) {
-          const updated = [...prev];
-          updated[tempIdx] = msg;
-          return updated;
+    channel
+      .on('postgres_changes', {
+        event: 'INSERT', schema: 'public', table: 'chat_messages',
+        filter: `chat_id=eq.${chatId}`,
+      }, async (payload) => {
+        const msg = payload.new;
+        setMessages(prev => {
+          const tempIdx = prev.findIndex(m => m._temp && m.content === msg.content && m.sender_id === msg.sender_id);
+          if (tempIdx !== -1) {
+            const updated = [...prev];
+            updated[tempIdx] = msg;
+            return updated;
+          }
+          return [...prev, msg];
+        });
+        
+        if (msg.sender_id !== user.id) {
+          await supabase.from('chat_messages').update({ is_read: true }).eq('id', msg.id);
+          setMessages(prev => prev.map(m =>
+            m.sender_id === user.id ? { ...m, is_read: true } : m
+          ));
         }
-        // הודעה של הצד השני
-        return [...prev, msg];
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'chat_messages',
+        filter: `chat_id=eq.${chatId}`,
+      }, (payload) => {
+        setMessages(prev => prev.map(m => m.id === payload.new.id ? { ...m, ...payload.new } : m));
+      })
+      .on('presence', { event: 'sync' }, () => {
+        const state = channel.presenceState();
+        const others = Object.keys(state).filter(k => k !== user.id);
+        setOtherOnline(others.length > 0);
+      })
+      .on('broadcast', { event: 'typing' }, ({ payload }) => {
+        if (payload.userId !== user.id) {
+          setOtherTyping(payload.isTyping);
+        }
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await channel.track({ online_at: new Date().toISOString() });
+        }
       });
-      if (msg.sender_id !== user.id) {
-        await supabase.from('chat_messages').update({ is_read: true }).eq('id', msg.id);
-        // עדכן ✓✓ בהודעות שלנו
-        setMessages(prev => prev.map(m =>
-          m.sender_id === user.id ? { ...m, is_read: true } : m
-        ));
-      }
-    });
-
-    // עדכון is_read של ההודעות שלנו (הצד השני קרא)
-    channel.on('postgres_changes', {
-      event: 'UPDATE', schema: 'public', table: 'chat_messages',
-      filter: `chat_id=eq.${chatId}`,
-    }, (payload) => {
-      setMessages(prev => prev.map(m => m.id === payload.new.id ? { ...m, ...payload.new } : m));
-    });
-
-    // Presence — אונליין
-    channel.on('presence', { event: 'sync' }, () => {
-      const state = channel.presenceState();
-      const others = Object.keys(state).filter(k => k !== user.id);
-      setOtherOnline(others.length > 0);
-    });
-
-    // Broadcast — הקלדה
-    channel.on('broadcast', { event: 'typing' }, ({ payload }) => {
-      if (payload.userId !== user.id) {
-        setOtherTyping(payload.isTyping);
-      }
-    });
-
-    channel.subscribe(async (status) => {
-      if (status === 'SUBSCRIBED') {
-        await channel.track({ online_at: new Date().toISOString() });
-      }
-    });
 
     return () => {
       supabase.removeChannel(channel);
@@ -437,7 +444,6 @@ export default function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, otherTyping]);
 
-  // ── שליחת אינדיקטור הקלדה ───────────────────────────────
   function handleTyping(e) {
     setText(e.target.value);
     if (!channelRef.current) return;
@@ -448,15 +454,12 @@ export default function ChatPage() {
     }, 1500);
   }
 
-  // ── שליחת הודעת טקסט — Optimistic ───────────────────────
   async function sendMessage(content = null, fileUrl = null, fileType = null, fileName = null) {
     if (!content?.trim() && !fileUrl) return;
 
-    // עצור אינדיקטור הקלדה
     clearTimeout(typingTimeoutRef.current);
     channelRef.current?.send({ type: 'broadcast', event: 'typing', payload: { userId: user.id, isTyping: false } });
 
-    // הוסף מיד ל-UI (optimistic)
     const tempMsg = {
       _temp: true,
       id: `temp_${Date.now()}`,
@@ -468,6 +471,7 @@ export default function ChatPage() {
       file_name: fileName,
       is_read: false,
       created_at: new Date().toISOString(),
+      reactions: {}
     };
     setMessages(prev => [...prev, tempMsg]);
     setText('');
@@ -479,6 +483,7 @@ export default function ChatPage() {
       file_url: fileUrl,
       file_type: fileType,
       file_name: fileName,
+      reactions: {}
     });
 
     if (err) {
@@ -489,7 +494,61 @@ export default function ChatPage() {
     }
   }
 
-  // ── העלאת קובץ ──────────────────────────────────────────
+  // --- עריכה ותגובות ---
+  async function submitEdit() {
+    if (!editText.trim()) return;
+    const { error } = await supabase.from('chat_messages')
+      .update({ content: editText.trim(), edited_at: new Date().toISOString() })
+      .eq('id', editingMsgId);
+    
+    if (error) {
+      alert('שגיאה בעריכת ההודעה');
+    } else {
+      setEditingMsgId(null);
+    }
+  }
+
+  async function toggleReaction(msgId, currentReactions, emoji) {
+    let reactions = { ...currentReactions };
+    let usersWhoReacted = reactions[emoji] || [];
+
+    if (usersWhoReacted.includes(user.id)) {
+      usersWhoReacted = usersWhoReacted.filter(id => id !== user.id);
+    } else {
+      usersWhoReacted.push(user.id);
+    }
+
+    if (usersWhoReacted.length > 0) {
+      reactions[emoji] = usersWhoReacted;
+    } else {
+      delete reactions[emoji];
+    }
+
+    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, reactions } : m));
+    setActiveReactionMenu(null);
+    await supabase.from('chat_messages').update({ reactions }).eq('id', msgId);
+  }
+
+  function formatMessageContent(content) {
+    if (!content) return null;
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    return content.split(urlRegex).map((part, i) => {
+      if (part.match(urlRegex)) {
+        return (
+          <a key={i} href={part} target="_blank" rel="noopener noreferrer" style={{ color: '#4fc3f7', textDecoration: 'underline' }}>
+            {part}
+          </a>
+        );
+      }
+      return part;
+    });
+  }
+
+  function canEditMessage(msgCreatedAt) {
+    const timeDiff = Date.now() - new Date(msgCreatedAt).getTime();
+    return timeDiff < 5 * 60 * 1000;
+  }
+
   async function handleFileUpload(e) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -525,7 +584,6 @@ export default function ChatPage() {
     <main className="page-content" style={{ height: 'calc(100vh - 130px)', display: 'flex', flexDirection: 'column', padding: 0 }}>
       <div style={{ maxWidth: 720, width: '100%', margin: '0 auto', flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
 
-        {/* ── Header ────────────────────────────────────── */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: '0.75rem',
           padding: '0.75rem 1rem',
@@ -544,7 +602,6 @@ export default function ChatPage() {
                 }}>
                   {(otherUser.display_name || '?')[0].toUpperCase()}
                 </div>
-                {/* נקודה ירוקה אונליין */}
                 <span style={{
                   position: 'absolute', bottom: 1, left: 1,
                   width: 11, height: 11, borderRadius: '50%',
@@ -566,8 +623,6 @@ export default function ChatPage() {
           )}
         </div>
 
-        {/* ── אזור הודעות ───────────────────────────────── */}
-        {/* direction:ltr מנטרל את html{direction:rtl} הגלובלי — אנחנו שולטים בכיוון ידנית */}
         <div style={{
           flex: 1, overflowY: 'auto',
           padding: '1rem',
@@ -590,16 +645,13 @@ export default function ChatPage() {
               new Date(msg.created_at).toDateString() !== new Date(prevMsg.created_at).toDateString();
             const timeStr = new Date(msg.created_at).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
 
-            // צבעי בלון — dark mode
-            // שלי: אדום/accent מעומעם כהה עם טקסט בהיר
-            // שלו: כרטיס כהה עם טקסט בהיר
             const bubbleBg    = isMine ? 'rgba(230,57,70,0.22)' : 'var(--bg-card)';
             const bubbleBorder= isMine ? '1px solid rgba(230,57,70,0.35)' : '1px solid var(--border)';
-            const bubbleColor = 'var(--text-primary)'; // תמיד בהיר — מתאים לדארק מוד
+            const bubbleColor = 'var(--text-primary)'; 
+            const isEditing   = editingMsgId === msg.id;
 
             return (
               <React.Fragment key={msg.id}>
-                {/* הפרדת תאריך */}
                 {showDateSep && (
                   <div style={{ textAlign: 'center', margin: '0.75rem 0 0.3rem' }}>
                     <span style={{
@@ -612,9 +664,6 @@ export default function ChatPage() {
                   </div>
                 )}
 
-                {/* פתרון אמין: text-align פיזי + inline-block.
-                    אין כאן שום תלות ב-flex/direction/margin-auto שיכולים "להתאפס"
-                    כשיש width מפורש — זו שיטה שעובדת 100% מהזמן. */}
                 <div style={{ width: '100%', textAlign: isMine ? 'right' : 'left' }}>
                   <div style={{
                     display: 'inline-flex',
@@ -622,9 +671,8 @@ export default function ChatPage() {
                     alignItems: 'flex-end',
                     gap: '0.4rem',
                     maxWidth: '100%',
-                    textAlign: 'right', // מאפס את ה-textAlign של ההורה כדי שלא ידלוף לתוכן הפנימי
+                    textAlign: 'right',
                   }}>
-                  {/* אווטאר — תמיד בצד הרחוק (שמאל עבור השני, לא מוצג עבורי) */}
                   {!isMine && (
                     <div style={{
                       width: 28, height: 28, borderRadius: '50%', background: otherColor,
@@ -636,17 +684,13 @@ export default function ChatPage() {
                     </div>
                   )}
 
-                  {/* בלון ההודעה */}
                   <div style={{
                     maxWidth: '72%',
-                    // הודעת אודיו צריכה רוחב מינימלי, אחרת ה-flex item מצטמצם
-                    // לרוחב התוכן הקטן ביותר והדפדפן מציג רק כפתור "⋮" (תפריט עוד אופציות)
-                    // במקום נגן מלא (פליי + סליידר + זמן).
                     minWidth: (msg.file_url && msg.file_type === 'audio') ? '260px' : undefined,
                     padding: '0.5rem 0.85rem 0.35rem',
                     borderRadius: isMine
-                      ? '1.1rem 1.1rem 0.25rem 1.1rem'   // פינה תחתון-ימין שטוחה (ימין = שלי)
-                      : '1.1rem 1.1rem 1.1rem 0.25rem',  // פינה תחתון-שמאל שטוחה (שמאל = שלו)
+                      ? '1.1rem 1.1rem 0.25rem 1.1rem'
+                      : '1.1rem 1.1rem 1.1rem 0.25rem',
                     background: bubbleBg,
                     border: bubbleBorder,
                     color: bubbleColor,
@@ -655,22 +699,18 @@ export default function ChatPage() {
                     transition: 'opacity 0.15s',
                     fontSize: '0.92rem', lineHeight: 1.5,
                   }}>
-                    {/* תמונה */}
                     {msg.file_url && msg.file_type === 'image' && (
                       <img src={msg.file_url} alt={msg.file_name}
                         style={{ maxWidth: '100%', borderRadius: '0.6rem', display: 'block', marginBottom: msg.content ? '0.4rem' : '0.25rem' }} />
                     )}
-                    {/* וידאו */}
                     {msg.file_url && msg.file_type === 'video' && (
                       <video src={msg.file_url} controls
                         style={{ maxWidth: '100%', borderRadius: '0.6rem', display: 'block', marginBottom: msg.content ? '0.4rem' : '0.25rem' }} />
                     )}
-                    {/* אודיו */}
                     {msg.file_url && msg.file_type === 'audio' && (
                       <audio src={msg.file_url} controls
                         style={{ width: '100%', minWidth: '230px', marginBottom: msg.content ? '0.4rem' : '0.25rem' }} />
                     )}
-                    {/* קובץ / ZIP */}
                     {msg.file_url && (msg.file_type === 'zip' || msg.file_type === 'file') && (
                       <a href={msg.file_url} target="_blank" rel="noopener noreferrer"
                         style={{ display: 'flex', alignItems: 'center', gap: '0.4rem',
@@ -679,27 +719,86 @@ export default function ChatPage() {
                       </a>
                     )}
 
-                    {/* טקסט */}
-                    {msg.content && (
-                      <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--text-primary)' }}>
-                        {msg.content}
-                      </span>
+                    {isEditing ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                        <textarea
+                          value={editText}
+                          onChange={(e) => setEditText(e.target.value)}
+                          style={{
+                            width: '100%', minHeight: '50px', background: 'var(--bg-secondary)', color: 'var(--text-primary)',
+                            border: '1px solid var(--accent)', borderRadius: '5px', padding: '5px',
+                            resize: 'none', fontSize: '0.9rem'
+                          }}
+                        />
+                        <div style={{ display: 'flex', gap: '5px', justifyContent: 'flex-end' }}>
+                          <button onClick={() => setEditingMsgId(null)} className="btn btn-ghost btn-sm" style={{ padding: '2px 8px', fontSize: '0.75rem' }}>ביטול</button>
+                          <button onClick={submitEdit} className="btn btn-primary btn-sm" style={{ padding: '2px 8px', fontSize: '0.75rem' }}>שמור</button>
+                        </div>
+                      </div>
+                    ) : (
+                      msg.content && (
+                        <span style={{ whiteSpace: 'pre-wrap', overflowWrap: 'break-word', wordBreak: 'normal', color: 'var(--text-primary)' }}>
+                          {formatMessageContent(msg.content)}
+                        </span>
+                      )
                     )}
 
-                    {/* שעה + V V */}
                     <div style={{
                       display: 'flex', alignItems: 'center',
-                      justifyContent: 'flex-start', // ב-RTL זה ימין בפועל (תחתית הבלון)
-                      gap: '0.25rem', marginTop: '0.25rem',
+                      justifyContent: 'flex-start',
+                      gap: '0.5rem', marginTop: '0.35rem',
                       fontSize: '0.67rem', color: 'var(--text-muted)',
-                      whiteSpace: 'nowrap',
+                      flexWrap: 'wrap',
                     }}>
-                      {isMine && (
-                        <span style={{ color: msg.is_read ? '#4fc3f7' : 'var(--text-muted)' }}>
-                          {isTemp ? '🕐' : msg.is_read ? '✓✓' : '✓'}
-                        </span>
+                      
+                      {msg.reactions && Object.keys(msg.reactions).length > 0 && (
+                        <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-secondary)', padding: '2px 6px', borderRadius: '12px', border: '1px solid var(--border)' }}>
+                          {Object.entries(msg.reactions).map(([emoji, usersArr]) => (
+                            <span key={emoji} onClick={() => toggleReaction(msg.id, msg.reactions, emoji)} style={{ cursor: 'pointer', fontSize: '0.75rem' }} title={usersArr.length + ' משתמשים'}>
+                              {emoji} <span style={{fontSize: '0.6rem'}}>{usersArr.length}</span>
+                            </span>
+                          ))}
+                        </div>
                       )}
-                      <span>{timeStr}</span>
+
+                      <div style={{ display: 'flex', gap: '6px', marginRight: 'auto', position: 'relative' }}>
+                        {msg.content && !isEditing && (
+                          <button onClick={() => { navigator.clipboard.writeText(msg.content); alert('הטקסט הועתק'); }} style={{ background: 'none', border: 'none', cursor: 'pointer', opacity: 0.7 }} title="העתק טקסט">📋</button>
+                        )}
+                        {isMine && !isEditing && msg.content && canEditMessage(msg.created_at) && (
+                          <button onClick={() => { setEditingMsgId(msg.id); setEditText(msg.content); }} style={{ background: 'none', border: 'none', cursor: 'pointer', opacity: 0.7 }} title="ערוך הודעה">✏️</button>
+                        )}
+                        {!isTemp && (
+                          <div style={{ position: 'relative' }}>
+                            <button onClick={() => setActiveReactionMenu(activeReactionMenu === msg.id ? null : msg.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', opacity: 0.7 }} title="הוסף תגובה">☻</button>
+                            {activeReactionMenu === msg.id && (
+                              <div style={{
+                                position: 'absolute', bottom: '100%', right: '50%', transform: 'translateX(50%)',
+                                background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '20px',
+                                padding: '4px 8px', display: 'flex', gap: '6px', boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
+                                zIndex: 10
+                              }}>
+                                {EMOJI_OPTIONS.map(emoji => (
+                                  <span key={emoji} onClick={() => toggleReaction(msg.id, msg.reactions || {}, emoji)} style={{ cursor: 'pointer', fontSize: '1.2rem', transition: 'transform 0.1s' }} onMouseEnter={e => e.target.style.transform = 'scale(1.2)'} onMouseLeave={e => e.target.style.transform = 'scale(1)'}>
+                                    {emoji}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
+                        {msg.edited_at && <span style={{ fontSize: '0.6rem', fontStyle: 'italic', marginRight: '4px' }}>(נערך)</span>}
+                        {isMine && (
+                          <span style={{ color: msg.is_read ? '#4fc3f7' : 'var(--text-muted)' }}>
+                            {isTemp ? '🕐' : msg.is_read ? '✓✓' : '✓'}
+                          </span>
+                        )}
+                        <span>{timeStr}</span>
+                      </div>
+
                     </div>
                   </div>
                   </div>
@@ -708,7 +807,6 @@ export default function ChatPage() {
             );
           })}
 
-          {/* אינדיקטור הקלדה — תמיד משמאל (הצד השני) */}
           {otherTyping && (
             <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-end', gap: '0.4rem', marginRight: 'auto', marginLeft: 0 }}>
               <div style={{
@@ -742,7 +840,6 @@ export default function ChatPage() {
           <div ref={bottomRef} />
         </div>
 
-        {/* ── Input bar ─────────────────────────────────── */}
         <div style={{
           padding: '0.6rem 0.85rem',
           background: 'var(--bg-card)',
@@ -755,7 +852,6 @@ export default function ChatPage() {
               accept="image/*,video/*,audio/*,.zip,application/zip"
               onChange={handleFileUpload} />
 
-            {/* כפתור קובץ */}
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
@@ -771,7 +867,6 @@ export default function ChatPage() {
               {uploading ? <div className="spinner" style={{ width: 16, height: 16 }} /> : '📎'}
             </button>
 
-            {/* שדה טקסט */}
             <textarea
               className="form-input"
               value={text}
@@ -789,7 +884,6 @@ export default function ChatPage() {
               }}
             />
 
-            {/* כפתור שליחה */}
             <button
               onClick={() => sendMessage(text)}
               disabled={!text.trim()}
@@ -801,13 +895,12 @@ export default function ChatPage() {
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: '1rem', color: text.trim() ? '#fff' : 'var(--text-muted)',
                 transition: 'all 0.2s',
-                transform: 'scaleX(-1)', // הפוך את החץ לכיוון RTL
+                transform: 'scaleX(-1)', 
               }}
             >➤</button>
           </div>
         </div>
 
-        {/* אנימציית נקודות הקלדה */}
         <style>{`
           @keyframes typingBounce {
             0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
