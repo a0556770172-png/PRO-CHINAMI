@@ -2,7 +2,15 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { formatDate, timeAgo, getRoleBadge, EMOJIS, getYouTubeId } from '../lib/utils';
+import { formatDate, timeAgo, getRoleBadge, EMOJIS } from '../lib/utils';
+
+// ===== זיהוי לינק יוטיוב וחילוץ ה-ID (מוגדר כאן מקומית כדי לא להיות תלוי בתוכן utils.js) =====
+function getYouTubeId(url) {
+  if (!url) return null;
+  const pattern = /(?:youtube\.com\/watch\?v=|youtube\.com\/embed\/|youtube\.com\/v\/|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/;
+  const match = url.match(pattern);
+  return match ? match[1] : null;
+}
 
 export default function PostPage() {
   const { slug } = useParams();
