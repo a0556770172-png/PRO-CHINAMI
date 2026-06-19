@@ -612,20 +612,18 @@ export default function ChatPage() {
                   </div>
                 )}
 
-                {/* קונטיינר LTR פיזי: השורה עצמה תמיד ברוחב מלא, והמיקום (ימין/שמאל)
-                    נקבע עם margin:auto פיזי — לא תלוי בפרשנות flex-start/end,
-                    כך שהתנהגות עקבית בכל דפדפן ולא "מתהפכת". */}
-                <div style={{
-                  display: 'flex',
-                  flexDirection: 'row',
-                  width: '100%',
-                  alignItems: 'flex-end',
-                  gap: '0.4rem',
-                  // שלי (isMine) → דוחף את כל השורה לימין (marginLeft: auto)
-                  // שלו (!isMine) → נשאר בשמאל (marginRight: auto)
-                  marginLeft: isMine ? 'auto' : 0,
-                  marginRight: isMine ? 0 : 'auto',
-                }}>
+                {/* פתרון אמין: text-align פיזי + inline-block.
+                    אין כאן שום תלות ב-flex/direction/margin-auto שיכולים "להתאפס"
+                    כשיש width מפורש — זו שיטה שעובדת 100% מהזמן. */}
+                <div style={{ width: '100%', textAlign: isMine ? 'right' : 'left' }}>
+                  <div style={{
+                    display: 'inline-flex',
+                    flexDirection: 'row',
+                    alignItems: 'flex-end',
+                    gap: '0.4rem',
+                    maxWidth: '100%',
+                    textAlign: 'right', // מאפס את ה-textAlign של ההורה כדי שלא ידלוף לתוכן הפנימי
+                  }}>
                   {/* אווטאר — תמיד בצד הרחוק (שמאל עבור השני, לא מוצג עבורי) */}
                   {!isMine && (
                     <div style={{
@@ -699,6 +697,7 @@ export default function ChatPage() {
                       )}
                       <span>{timeStr}</span>
                     </div>
+                  </div>
                   </div>
                 </div>
               </React.Fragment>
