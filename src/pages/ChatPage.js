@@ -1,46 +1,3 @@
-אתה צודק לחלוטין באבחנה שלך! הבעיה נובעת מהרשאות האבטחה (Row Level Security - RLS) במסד הנתונים של Supabase. כברירת מחדל, Supabase חוסם פעולות של עדכון (`UPDATE`) ומחיקה (`DELETE`) אם לא הגדרת להן הרשאה (Policy) מפורשת.
-
-בנוסף, בקוד הקודם אכן לא הייתה קיימת פונקציית מחיקה כלל.
-
-הנה הפתרון המלא בשני שלבים: גם פקודת ה-SQL שמתקנת את ההרשאות, וגם הקוד המעודכן שכולל כפתור ופונקציית מחיקה בזמן אמת.
-
-### שלב 1: תיקון הרשאות במסד הנתונים (SQL)
-
-הרץ את הפקודות הבאות ב-SQL Editor של Supabase.
-*הערה חשובה: פקודת העדכון (UPDATE) מוגדרת כך שכל משתמש ששייך לשיחה יוכל לעדכן את ההודעה (זה הכרחי כדי שמשתמשים יוכלו לסמן ✓✓ על הודעות שקיבלו ולהוסיף תגובות סמיילי להודעות של הצד השני). פקודת המחיקה (DELETE) מאפשרת למשתמש למחוק **רק** הודעות שהוא בעצמו שלח.*
-
-```sql
--- מחיקת הרשאות קיימות (כדי למנוע התנגשויות)
-DROP POLICY IF EXISTS "Users can update messages in their chats" ON chat_messages;
-DROP POLICY IF EXISTS "Users can delete their own messages" ON chat_messages;
-
--- אישור עדכון (עריכה, תגובות, קריאה) למי שמשתתף בשיחה
-CREATE POLICY "Users can update messages in their chats"
-ON chat_messages FOR UPDATE
-USING (
-  EXISTS (
-    SELECT 1 FROM chats 
-    WHERE chats.id = chat_messages.chat_id 
-    AND (chats.user_a = auth.uid() OR chats.user_b = auth.uid())
-  )
-);
-
--- אישור מחיקה אך ורק לשולח ההודעה
-CREATE POLICY "Users can delete their own messages"
-ON chat_messages FOR DELETE
-USING (auth.uid() = sender_id);
-
-```
-
----
-
-### שלב 2: עדכון הקוד (הוספת אפשרות מחיקה וסנכרון בזמן אמת)
-
-הקוד הבא הוא הקוד המלא המעודכן של הקובץ שלך. הוספתי בו את כפתור המחיקה (🗑️), את הפונקציה שמוחקת מהשרת, וכן האזנה ל-Realtime כך שאם תמחק הודעה, היא תיעלם מיידית גם מהמסך של הצד השני.
-
-העתק והחלף את כל הקובץ:
-
-```jsx
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
@@ -979,5 +936,3 @@ export default function ChatPage() {
     </main>
   );
 }
-
-```
