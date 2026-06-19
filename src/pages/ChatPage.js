@@ -567,13 +567,11 @@ export default function ChatPage() {
         </div>
 
         {/* ── אזור הודעות ───────────────────────────────── */}
-        {/* direction: rtl כדי שהעברית תהיה נכונה — ההודעות שלי מימין, שלו משמאל */}
         <div style={{
           flex: 1, overflowY: 'auto',
           padding: '1rem',
           display: 'flex', flexDirection: 'column', gap: '0.4rem',
           background: 'var(--bg-primary)',
-          direction: 'rtl',
         }}>
           {messages.length === 0 && (
             <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '4rem' }}>
@@ -583,7 +581,6 @@ export default function ChatPage() {
           )}
 
           {messages.map((msg, idx) => {
-            // isMine = ההודעה שלי → מימין (justify flex-end ב-RTL = ימין)
             const isMine = msg.sender_id === user.id;
             const isTemp = !!msg._temp;
             const prevMsg = messages[idx - 1];
@@ -613,18 +610,14 @@ export default function ChatPage() {
                   </div>
                 )}
 
-                {/*
-                  RTL: justify-content flex-start = שמאל (המשתמש השני)
-                        justify-content flex-end   = ימין (אני)
-                  לכן: isMine → flex-end (ימין) ✓
-                */}
+                {/* isMine → row-reverse = בלון מימין, אווטאר השני משמאל */}
                 <div style={{
                   display: 'flex',
-                  justifyContent: isMine ? 'flex-end' : 'flex-start',
+                  flexDirection: isMine ? 'row-reverse' : 'row',
                   alignItems: 'flex-end',
                   gap: '0.4rem',
                 }}>
-                  {/* אווטאר שמאל — הצד השני */}
+                  {/* אווטאר — תמיד בצד הרחוק (שמאל עבור השני, לא מוצג עבורי) */}
                   {!isMine && (
                     <div style={{
                       width: 28, height: 28, borderRadius: '50%', background: otherColor,
@@ -703,9 +696,9 @@ export default function ChatPage() {
             );
           })}
 
-          {/* אינדיקטור הקלדה — צד שמאל (המשתמש השני) */}
+          {/* אינדיקטור הקלדה — תמיד משמאל (הצד השני) */}
           {otherTyping && (
-            <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'flex-end', gap: '0.4rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-end', gap: '0.4rem' }}>
               <div style={{
                 width: 28, height: 28, borderRadius: '50%', background: otherColor,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
