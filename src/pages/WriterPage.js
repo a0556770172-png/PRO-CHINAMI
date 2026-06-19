@@ -14,9 +14,12 @@ export default function WriterPage() {
   const [myPosts, setMyPosts] = useState([]);
   const [form, setForm] = useState({
     title: '', content: '', excerpt: '', cover_image: '',
+    video_url: '', audio_url: '', // ===== חדש =====
     category_id: '', tags: '', status: isAdmin || isWriter ? 'published' : 'pending'
   });
   const [loading, setLoading] = useState(false);
+  const [uploadingVideo, setUploadingVideo] = useState(false); // ===== חדש =====
+  const [uploadingAudio, setUploadingAudio] = useState(false); // ===== חדש =====
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [activeTab, setActiveTab] = useState('write');
@@ -46,7 +49,9 @@ export default function WriterPage() {
     if (data) {
       setForm({
         title: data.title, content: data.content, excerpt: data.excerpt || '',
-        cover_image: data.cover_image || '', category_id: data.category_id || '',
+        cover_image: data.cover_image || '',
+        video_url: data.video_url || '', audio_url: data.audio_url || '', // ===== חדש =====
+        category_id: data.category_id || '',
         tags: (data.tags || []).join(', '), status: data.status
       });
       setActiveTab('write');
@@ -54,6 +59,37 @@ export default function WriterPage() {
   }
 
   const handleChange = e => setForm(f => ({ ...f, [e.target.name]: e.target.value }));
+
+  // ===== חדש: פונקציית העלאת קבצים (וידאו/קול) ל-Supabase Storage =====
+  async function handleFileUpload(e, field, setUploading) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (file.size > 50 * 1024 * 1024) {
+      setError('הקובץ גדול מ-50MB, אנא בחר קובץ קטן יותר');
+      e.target.value = '';
+      return;
+    }
+
+    setUploading(true);
+    setError('');
+    try {
+      const ext = file.name.split('.').pop();
+      const path = `${user.id}/${Date.now()}.${ext}`;
+      const { error: uploadError } = await supabase.storage
+        .from('post-media')
+        .upload(path, file);
+      if (uploadError) throw uploadError;
+      const { data: urlData } = supabase.storage
+        .from('post-media')
+        .getPublicUrl(path);
+      setForm(f => ({ ...f, [field]: urlData.publicUrl }));
+    } catch (err) {
+      setError('שגיאה בהעלאת הקובץ: ' + err.message);
+    }
+    setUploading(false);
+    e.target.value = '';
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -65,6 +101,8 @@ export default function WriterPage() {
       content: form.content,
       excerpt: form.excerpt.trim() || form.content.replace(/<[^>]+>/g,'').substring(0, 200),
       cover_image: form.cover_image.trim() || null,
+      video_url: form.video_url || null, // ===== חדש =====
+      audio_url: form.audio_url || null, // ===== חדש =====
       category_id: form.category_id || null,
       tags: form.tags ? form.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
       status: form.status,
@@ -82,7 +120,11 @@ export default function WriterPage() {
       if (error) setError('שגיאה בשמירה: ' + error.message);
       else {
         setSuccess(form.status === 'published' ? 'הפוסט פורסם בהצלחה!' : 'הפוסט נשמר ומחכה לאישור');
-        setForm({ title:'', content:'', excerpt:'', cover_image:'', category_id:'', tags:'', status: isAdmin||isWriter?'published':'pending' });
+        setForm({
+          title:'', content:'', excerpt:'', cover_image:'',
+          video_url:'', audio_url:'', // ===== חדש =====
+          category_id:'', tags:'', status: isAdmin||isWriter?'published':'pending'
+        });
         await loadData();
       }
     }
@@ -160,6 +202,52 @@ export default function WriterPage() {
                 value={form.cover_image} onChange={handleChange} />
             </div>
 
+            {/* ===== חדש: העלאת וידאו ===== */}
+            <div className="form-group">
+              <label className="form-label">🎥 וידאו (אופציונלי)</label>
+              <input
+                type="file"
+                accept="video/*"
+                className="form-input"
+                onChange={e => handleFileUpload(e, 'video_url', setUploadingVideo)}
+                disabled={uploadingVideo}
+              />
+              {uploadingVideo && <span className="form-hint">⏳ מעלה וידאו...</span>}
+              {form.video_url && (
+                <div style={{ marginTop:'0.5rem' }}>
+                  <video src={form.video_url} controls style={{ maxWidth:'100%', maxHeight:200, borderRadius:'var(--radius-sm)' }} />
+                  <div>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setForm(f => ({ ...f, video_url:'' }))}>
+                      🗑 הסר וידאו
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* ===== חדש: העלאת קול ===== */}
+            <div className="form-group">
+              <label className="form-label">🎵 קובץ קול (אופציונלי)</label>
+              <input
+                type="file"
+                accept="audio/*"
+                className="form-input"
+                onChange={e => handleFileUpload(e, 'audio_url', setUploadingAudio)}
+                disabled={uploadingAudio}
+              />
+              {uploadingAudio && <span className="form-hint">⏳ מעלה קובץ קול...</span>}
+              {form.audio_url && (
+                <div style={{ marginTop:'0.5rem' }}>
+                  <audio src={form.audio_url} controls style={{ width:'100%' }} />
+                  <div>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setForm(f => ({ ...f, audio_url:'' }))}>
+                      🗑 הסר קול
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div className="form-group">
               <label className="form-label">תגיות (מופרדות בפסיק)</label>
               <input name="tags" className="form-input" placeholder="חדשות, ישראל, טכנולוגיה"
@@ -170,7 +258,7 @@ export default function WriterPage() {
             {success && <div className="alert alert-success">✅ {success}</div>}
 
             <div style={{ display:'flex', gap:'0.75rem' }}>
-              <button type="submit" className="btn btn-primary" disabled={loading}>
+              <button type="submit" className="btn btn-primary" disabled={loading || uploadingVideo || uploadingAudio}>
                 {loading ? <><div className="spinner" style={{ width:14, height:14 }}></div> שומר...</>
                   : editId ? '💾 עדכן פוסט' : '🚀 פרסם פוסט'}
               </button>
