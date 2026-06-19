@@ -7,8 +7,10 @@ import PostPage from './pages/PostPage';
 import CategoryPage from './pages/CategoryPage';
 import AdminPage from './pages/AdminPage';
 import ProfilePage from './pages/ProfilePage';
+import UserProfilePage from './pages/UserProfilePage';
 import AuthPage from './pages/AuthPage';
 import WriterPage from './pages/WriterPage';
+import ChatPage, { ChatsListPage } from './pages/ChatPage';
 import './App.css';
 
 export default function App() {
@@ -21,6 +23,9 @@ export default function App() {
             <Route path="post/:slug" element={<PostPage />} />
             <Route path="category/:slug" element={<CategoryPage />} />
             <Route path="profile" element={<ProfilePage />} />
+            <Route path="user/:userId" element={<UserProfilePage />} />
+            <Route path="chats" element={<ChatsListPage />} />
+            <Route path="chat/:chatId" element={<ChatPage />} />
             <Route path="writer" element={<WriterPage />} />
             <Route path="auth" element={<AuthPage />} />
             <Route path="admin" element={<AdminPage />} />
