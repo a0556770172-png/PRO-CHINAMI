@@ -1,3 +1,46 @@
+אתה צודק לחלוטין באבחנה שלך! הבעיה נובעת מהרשאות האבטחה (Row Level Security - RLS) במסד הנתונים של Supabase. כברירת מחדל, Supabase חוסם פעולות של עדכון (`UPDATE`) ומחיקה (`DELETE`) אם לא הגדרת להן הרשאה (Policy) מפורשת.
+
+בנוסף, בקוד הקודם אכן לא הייתה קיימת פונקציית מחיקה כלל.
+
+הנה הפתרון המלא בשני שלבים: גם פקודת ה-SQL שמתקנת את ההרשאות, וגם הקוד המעודכן שכולל כפתור ופונקציית מחיקה בזמן אמת.
+
+### שלב 1: תיקון הרשאות במסד הנתונים (SQL)
+
+הרץ את הפקודות הבאות ב-SQL Editor של Supabase.
+*הערה חשובה: פקודת העדכון (UPDATE) מוגדרת כך שכל משתמש ששייך לשיחה יוכל לעדכן את ההודעה (זה הכרחי כדי שמשתמשים יוכלו לסמן ✓✓ על הודעות שקיבלו ולהוסיף תגובות סמיילי להודעות של הצד השני). פקודת המחיקה (DELETE) מאפשרת למשתמש למחוק **רק** הודעות שהוא בעצמו שלח.*
+
+```sql
+-- מחיקת הרשאות קיימות (כדי למנוע התנגשויות)
+DROP POLICY IF EXISTS "Users can update messages in their chats" ON chat_messages;
+DROP POLICY IF EXISTS "Users can delete their own messages" ON chat_messages;
+
+-- אישור עדכון (עריכה, תגובות, קריאה) למי שמשתתף בשיחה
+CREATE POLICY "Users can update messages in their chats"
+ON chat_messages FOR UPDATE
+USING (
+  EXISTS (
+    SELECT 1 FROM chats 
+    WHERE chats.id = chat_messages.chat_id 
+    AND (chats.user_a = auth.uid() OR chats.user_b = auth.uid())
+  )
+);
+
+-- אישור מחיקה אך ורק לשולח ההודעה
+CREATE POLICY "Users can delete their own messages"
+ON chat_messages FOR DELETE
+USING (auth.uid() = sender_id);
+
+```
+
+---
+
+### שלב 2: עדכון הקוד (הוספת אפשרות מחיקה וסנכרון בזמן אמת)
+
+הקוד הבא הוא הקוד המלא המעודכן של הקובץ שלך. הוספתי בו את כפתור המחיקה (🗑️), את הפונקציה שמוחקת מהשרת, וכן האזנה ל-Realtime כך שאם תמחק הודעה, היא תיעלם מיידית גם מהמסך של הצד השני.
+
+העתק והחלף את כל הקובץ:
+
+```jsx
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
@@ -418,6 +461,13 @@ export default function ChatPage() {
       }, (payload) => {
         setMessages(prev => prev.map(m => m.id === payload.new.id ? { ...m, ...payload.new } : m));
       })
+      // הוספת האזנה למחיקת הודעות בזמן אמת
+      .on('postgres_changes', {
+        event: 'DELETE', schema: 'public', table: 'chat_messages',
+        filter: `chat_id=eq.${chatId}`,
+      }, (payload) => {
+        setMessages(prev => prev.filter(m => m.id !== payload.old.id));
+      })
       .on('presence', { event: 'sync' }, () => {
         const state = channel.presenceState();
         const others = Object.keys(state).filter(k => k !== user.id);
@@ -494,7 +544,7 @@ export default function ChatPage() {
     }
   }
 
-  // --- עריכה ותגובות ---
+  // --- עריכה, מחיקה ותגובות ---
   async function submitEdit() {
     if (!editText.trim()) return;
     const { error } = await supabase.from('chat_messages')
@@ -502,9 +552,23 @@ export default function ChatPage() {
       .eq('id', editingMsgId);
     
     if (error) {
-      alert('שגיאה בעריכת ההודעה');
+      alert('שגיאה בעריכת ההודעה (בדוק הרשאות SQL)');
     } else {
       setEditingMsgId(null);
+    }
+  }
+
+  // הפונקציה החדשה למחיקת הודעה
+  async function deleteMessage(msgId) {
+    if (!window.confirm('האם אתה בטוח שברצונך למחוק הודעה זו?')) return;
+    
+    // מחיקה אופטימית מהמסך המקומי
+    setMessages(prev => prev.filter(m => m.id !== msgId));
+    
+    const { error } = await supabase.from('chat_messages').delete().eq('id', msgId);
+    if (error) {
+      alert('שגיאה במחיקת ההודעה. בדוק הרשאות SQL.');
+      loadChat(); // במקרה של שגיאה, נטען מחדש מהשרת
     }
   }
 
@@ -765,8 +829,12 @@ export default function ChatPage() {
                         {msg.content && !isEditing && (
                           <button onClick={() => { navigator.clipboard.writeText(msg.content); alert('הטקסט הועתק'); }} style={{ background: 'none', border: 'none', cursor: 'pointer', opacity: 0.7 }} title="העתק טקסט">📋</button>
                         )}
-                        {isMine && !isEditing && msg.content && canEditMessage(msg.created_at) && (
-                          <button onClick={() => { setEditingMsgId(msg.id); setEditText(msg.content); }} style={{ background: 'none', border: 'none', cursor: 'pointer', opacity: 0.7 }} title="ערוך הודעה">✏️</button>
+                        {/* תוספת כפתורי העריכה והמחיקה */}
+                        {isMine && !isEditing && canEditMessage(msg.created_at) && (
+                          <>
+                            {msg.content && <button onClick={() => { setEditingMsgId(msg.id); setEditText(msg.content); }} style={{ background: 'none', border: 'none', cursor: 'pointer', opacity: 0.7 }} title="ערוך הודעה">✏️</button>}
+                            <button onClick={() => deleteMessage(msg.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', opacity: 0.7 }} title="מחק הודעה">🗑️</button>
+                          </>
                         )}
                         {!isTemp && (
                           <div style={{ position: 'relative' }}>
@@ -911,3 +979,5 @@ export default function ChatPage() {
     </main>
   );
 }
+
+```
