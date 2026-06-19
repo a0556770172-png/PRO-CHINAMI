@@ -639,6 +639,10 @@ export default function ChatPage() {
                   {/* בלון ההודעה */}
                   <div style={{
                     maxWidth: '72%',
+                    // הודעת אודיו צריכה רוחב מינימלי, אחרת ה-flex item מצטמצם
+                    // לרוחב התוכן הקטן ביותר והדפדפן מציג רק כפתור "⋮" (תפריט עוד אופציות)
+                    // במקום נגן מלא (פליי + סליידר + זמן).
+                    minWidth: (msg.file_url && msg.file_type === 'audio') ? '260px' : undefined,
                     padding: '0.5rem 0.85rem 0.35rem',
                     borderRadius: isMine
                       ? '1.1rem 1.1rem 0.25rem 1.1rem'   // פינה תחתון-ימין שטוחה (ימין = שלי)
@@ -664,7 +668,7 @@ export default function ChatPage() {
                     {/* אודיו */}
                     {msg.file_url && msg.file_type === 'audio' && (
                       <audio src={msg.file_url} controls
-                        style={{ width: '100%', marginBottom: msg.content ? '0.4rem' : '0.25rem' }} />
+                        style={{ width: '100%', minWidth: '230px', marginBottom: msg.content ? '0.4rem' : '0.25rem' }} />
                     )}
                     {/* קובץ / ZIP */}
                     {msg.file_url && (msg.file_type === 'zip' || msg.file_type === 'file') && (
