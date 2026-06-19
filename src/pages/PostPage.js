@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { formatDate, timeAgo, getRoleBadge, EMOJIS } from '../lib/utils';
+import { formatDate, timeAgo, getRoleBadge, EMOJIS, getYouTubeId } from '../lib/utils';
 
 export default function PostPage() {
   const { slug } = useParams();
@@ -163,12 +163,21 @@ export default function PostPage() {
               {/* ===== מתוקן: וידאו עטוף בקונטיינר עם יחס תצוגה קבוע ===== */}
               {post.video_url && (
                 <div className="post-video-wrapper">
-                  <video
-                    src={post.video_url}
-                    controls
-                    preload="metadata"
-                    playsInline
-                  />
+                  {getYouTubeId(post.video_url) ? (
+                    <iframe
+                      src={`https://www.youtube.com/embed/${getYouTubeId(post.video_url)}`}
+                      style={{ width: '100%', height: '100%', border: 'none' }}
+                      allowFullScreen
+                      title={post.title}
+                    />
+                  ) : (
+                    <video
+                      src={post.video_url}
+                      controls
+                      preload="metadata"
+                      playsInline
+                    />
+                  )}
                 </div>
               )}
 
