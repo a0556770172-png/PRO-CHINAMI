@@ -567,11 +567,13 @@ export default function ChatPage() {
         </div>
 
         {/* ── אזור הודעות ───────────────────────────────── */}
+        {/* direction:ltr מנטרל את html{direction:rtl} הגלובלי — אנחנו שולטים בכיוון ידנית */}
         <div style={{
           flex: 1, overflowY: 'auto',
           padding: '1rem',
           display: 'flex', flexDirection: 'column', gap: '0.4rem',
           background: 'var(--bg-primary)',
+          direction: 'ltr',
         }}>
           {messages.length === 0 && (
             <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '4rem' }}>
@@ -610,10 +612,11 @@ export default function ChatPage() {
                   </div>
                 )}
 
-                {/* isMine → row-reverse = בלון מימין, אווטאר השני משמאל */}
+                {/* LTR context: flex-end=ימין(שלי), flex-start=שמאל(שלו) */}
                 <div style={{
                   display: 'flex',
-                  flexDirection: isMine ? 'row-reverse' : 'row',
+                  flexDirection: 'row',
+                  justifyContent: isMine ? 'flex-end' : 'flex-start',
                   alignItems: 'flex-end',
                   gap: '0.4rem',
                 }}>
@@ -698,7 +701,7 @@ export default function ChatPage() {
 
           {/* אינדיקטור הקלדה — תמיד משמאל (הצד השני) */}
           {otherTyping && (
-            <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-end', gap: '0.4rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'flex-end', gap: '0.4rem' }}>
               <div style={{
                 width: 28, height: 28, borderRadius: '50%', background: otherColor,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -736,7 +739,6 @@ export default function ChatPage() {
           background: 'var(--bg-card)',
           borderTop: '1px solid var(--border)',
           flexShrink: 0,
-          direction: 'rtl',
         }}>
           {error && <div style={{ color: 'var(--accent)', fontSize: '0.8rem', marginBottom: '0.4rem' }}>{error}</div>}
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
