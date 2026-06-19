@@ -24,14 +24,18 @@ function fileTypeIcon(type) {
 }
 
 // =============================================
-// דף ראשי של הצ'אטים — רשימת שיחות
+// דף ראשי של הצ'אטים — שיחות + כל המשתמשים
 // =============================================
 export function ChatsListPage() {
   const { user, profile } = useAuth();
   const navigate = useNavigate();
+  const [tab, setTab] = useState('users'); // 'chats' | 'users'
   const [chats, setChats] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [allUsers, setAllUsers] = useState([]);
   const [unread, setUnread] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [startingChat, setStartingChat] = useState(null); // userId שנפתח כרגע
+  const [search, setSearch] = useState('');
 
   const canUseChat = profile &&
     (profile.role === 'admin' || profile.role === 'writer' || (profile.received_likes_count || 0) >= 50);
@@ -39,11 +43,16 @@ export function ChatsListPage() {
   useEffect(() => {
     if (!user) { navigate('/auth'); return; }
     if (!canUseChat) return;
-    loadChats();
+    loadAll();
   }, [user]);
 
-  async function loadChats() {
+  async function loadAll() {
     setLoading(true);
+    await Promise.all([loadChats(), loadUsers()]);
+    setLoading(false);
+  }
+
+  async function loadChats() {
     const { data } = await supabase
       .from('chats')
       .select(`
@@ -56,7 +65,6 @@ export function ChatsListPage() {
 
     setChats(data || []);
 
-    // ספור הודעות שלא נקראו
     const unreadMap = {};
     for (const chat of (data || [])) {
       const { count } = await supabase
@@ -68,7 +76,42 @@ export function ChatsListPage() {
       unreadMap[chat.id] = count || 0;
     }
     setUnread(unreadMap);
-    setLoading(false);
+  }
+
+  async function loadUsers() {
+    const { data } = await supabase
+      .from('profiles')
+      .select('id, display_name, role, received_likes_count, login_days_count')
+      .neq('id', user.id)
+      .eq('is_blocked', false)
+      .order('role')
+      .order('received_likes_count', { ascending: false });
+    setAllUsers(data || []);
+  }
+
+  async function startChat(targetUserId) {
+    setStartingChat(targetUserId);
+    const { data: chatId, error } = await supabase.rpc('get_or_create_chat', {
+      other_user_id: targetUserId,
+    });
+    setStartingChat(null);
+    if (error || !chatId) { alert('שגיאה ביצירת הצ\'אט'); return; }
+    navigate(`/chat/${chatId}`);
+  }
+
+  // בדוק אם יכול לשלוח לפי ההרשאות (client-side, הDB גם מגן)
+  function canSendTo(target) {
+    const myRole = profile.role;
+    const myLikes = profile.received_likes_count || 0;
+    const tRole = target.role;
+    const tLikes = target.received_likes_count || 0;
+
+    if (myRole === 'admin') return true;
+    if (tRole === 'admin') return true;
+    if (myRole === 'writer') return true;
+    if (tRole === 'writer') return myLikes >= 50;
+    if (myLikes >= 50 && tLikes >= 50) return true;
+    return false;
   }
 
   if (!user) return null;
@@ -92,60 +135,167 @@ export function ChatsListPage() {
     </main>
   );
 
+  const totalUnread = Object.values(unread).reduce((a, b) => a + b, 0);
+  const filteredUsers = allUsers.filter(u =>
+    u.display_name?.toLowerCase().includes(search.toLowerCase())
+  );
+
+  // קבץ משתמשים לפי תפקיד לתצוגה נוחה
+  const roleOrder = ['admin', 'writer', 'level3', 'level2', 'level1'];
+  const grouped = roleOrder.reduce((acc, role) => {
+    const group = filteredUsers.filter(u => u.role === role);
+    if (group.length) acc[role] = group;
+    return acc;
+  }, {});
+
+  const roleLabels = {
+    admin: '👑 מנהלים',
+    writer: '✍️ כתבים',
+    level3: '💜 נאמני האתר',
+    level2: '💙 מגיבים מורשים',
+    level1: '⬜ משתמשים חדשים',
+  };
+
   return (
     <main className="page-content">
-      <div className="container" style={{ maxWidth: 680 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
-          <h1 style={{ fontSize: '1.5rem' }}>💬 הצ'אטים שלי</h1>
+      <div className="container" style={{ maxWidth: 700 }}>
+        <h1 style={{ fontSize: '1.5rem', marginBottom: '1.25rem' }}>💬 צ'אט פרטי</h1>
+
+        {/* טאבים */}
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', borderBottom: '2px solid var(--border)', paddingBottom: '0' }}>
+          {[
+            { key: 'users', label: '👥 כל המשתמשים' },
+            { key: 'chats', label: `🗨️ השיחות שלי${totalUnread > 0 ? ` (${totalUnread})` : ''}` },
+          ].map(t => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                padding: '0.6rem 1.1rem', fontSize: '0.92rem', fontWeight: tab === t.key ? 700 : 400,
+                color: tab === t.key ? 'var(--accent)' : 'var(--text-muted)',
+                borderBottom: tab === t.key ? '2px solid var(--accent)' : '2px solid transparent',
+                marginBottom: '-2px',
+              }}
+            >{t.label}</button>
+          ))}
         </div>
 
         {loading ? (
           <div className="loading-page"><div className="spinner"></div></div>
-        ) : chats.length === 0 ? (
-          <div className="card" style={{ padding: '2rem', textAlign: 'center' }}>
-            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>💬</div>
-            <p style={{ color: 'var(--text-muted)' }}>אין שיחות עדיין. עבור לפרופיל של משתמש אחר ולחץ "שלח הודעה".</p>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            {chats.map(chat => {
-              const other = chat.user_a_profile?.id === user.id
-                ? chat.user_b_profile : chat.user_a_profile;
-              const { label, color } = getRoleBadge(other?.role);
-              const unreadCount = unread[chat.id] || 0;
-              return (
-                <div
-                  key={chat.id}
-                  className="card"
-                  onClick={() => navigate(`/chat/${chat.id}`)}
-                  style={{ padding: '1rem 1.2rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '1rem',
-                    borderLeft: unreadCount > 0 ? '3px solid var(--accent)' : '3px solid transparent' }}
-                >
-                  <div style={{ width: 46, height: 46, borderRadius: '50%', background: color,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: '1.3rem', fontWeight: 800, color: '#fff', flexShrink: 0 }}>
-                    {(other?.display_name || '?')[0].toUpperCase()}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <strong>{other?.display_name}</strong>
-                      <span className="badge" style={{ color, borderColor: color+'40', background: color+'15', fontSize: '0.7rem' }}>{label}</span>
-                      {unreadCount > 0 && (
-                        <span style={{ marginRight: 'auto', background: 'var(--accent)', color: '#fff',
-                          borderRadius: '999px', padding: '0.1rem 0.5rem', fontSize: '0.75rem', fontWeight: 700 }}>
-                          {unreadCount}
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                      {timeAgo(chat.last_message_at)}
-                    </div>
-                  </div>
-                  <span style={{ color: 'var(--text-muted)' }}>›</span>
+        ) : tab === 'users' ? (
+          <>
+            {/* חיפוש */}
+            <input
+              className="form-input"
+              placeholder="🔍 חיפוש משתמש..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{ marginBottom: '1rem' }}
+            />
+
+            {Object.entries(grouped).map(([role, users]) => (
+              <div key={role} style={{ marginBottom: '1.5rem' }}>
+                <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  {roleLabels[role]}
                 </div>
-              );
-            })}
-          </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {users.map(u => {
+                    const { label, color } = getRoleBadge(u.role);
+                    const allowed = canSendTo(u);
+                    const isLoading = startingChat === u.id;
+                    return (
+                      <div key={u.id} className="card" style={{
+                        padding: '0.85rem 1.1rem', display: 'flex', alignItems: 'center', gap: '0.85rem',
+                        opacity: allowed ? 1 : 0.5,
+                      }}>
+                        <div style={{
+                          width: 40, height: 40, borderRadius: '50%', background: color,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontWeight: 800, color: '#fff', fontSize: '1rem', flexShrink: 0,
+                        }}>
+                          {(u.display_name || '?')[0].toUpperCase()}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                            <strong style={{ fontSize: '0.95rem' }}>{u.display_name}</strong>
+                            <span className="badge" style={{ color, borderColor: color+'40', background: color+'15', fontSize: '0.68rem' }}>{label}</span>
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                            ❤️ {u.received_likes_count || 0} לייקים · 🗓 {u.login_days_count || 0} ימים
+                          </div>
+                        </div>
+                        {allowed ? (
+                          <button
+                            className="btn btn-primary btn-sm"
+                            onClick={() => startChat(u.id)}
+                            disabled={isLoading}
+                            style={{ flexShrink: 0 }}
+                          >
+                            {isLoading
+                              ? <div className="spinner" style={{ width: 13, height: 13 }} />
+                              : '💬 שלח'}
+                          </button>
+                        ) : (
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', flexShrink: 0 }}>🔒</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+
+            {filteredUsers.length === 0 && (
+              <div className="empty-state"><span className="empty-state-icon">🔍</span><p>לא נמצאו משתמשים</p></div>
+            )}
+          </>
+        ) : (
+          /* טאב שיחות */
+          chats.length === 0 ? (
+            <div className="card" style={{ padding: '2rem', textAlign: 'center' }}>
+              <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>💬</div>
+              <p style={{ color: 'var(--text-muted)' }}>אין שיחות עדיין. לחץ על "כל המשתמשים" כדי להתחיל.</p>
+              <button className="btn btn-primary btn-sm" style={{ marginTop: '1rem' }} onClick={() => setTab('users')}>👥 עבור למשתמשים</button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+              {chats.map(chat => {
+                const other = chat.user_a_profile?.id === user.id
+                  ? chat.user_b_profile : chat.user_a_profile;
+                const { label, color } = getRoleBadge(other?.role);
+                const unreadCount = unread[chat.id] || 0;
+                return (
+                  <div key={chat.id} className="card"
+                    onClick={() => navigate(`/chat/${chat.id}`)}
+                    style={{ padding: '1rem 1.2rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '1rem',
+                      borderRight: unreadCount > 0 ? '3px solid var(--accent)' : '3px solid transparent' }}>
+                    <div style={{ width: 44, height: 44, borderRadius: '50%', background: color,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: '1.2rem', fontWeight: 800, color: '#fff', flexShrink: 0 }}>
+                      {(other?.display_name || '?')[0].toUpperCase()}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <strong>{other?.display_name}</strong>
+                        <span className="badge" style={{ color, borderColor: color+'40', background: color+'15', fontSize: '0.7rem' }}>{label}</span>
+                        {unreadCount > 0 && (
+                          <span style={{ marginRight: 'auto', background: 'var(--accent)', color: '#fff',
+                            borderRadius: '999px', padding: '0 6px', fontSize: '0.72rem', fontWeight: 700, lineHeight: '18px' }}>
+                            {unreadCount}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                        {timeAgo(chat.last_message_at)}
+                      </div>
+                    </div>
+                    <span style={{ color: 'var(--text-muted)' }}>›</span>
+                  </div>
+                );
+              })}
+            </div>
+          )
         )}
       </div>
     </main>
