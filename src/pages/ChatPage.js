@@ -303,7 +303,7 @@ export function ChatsListPage() {
 }
 
 // =============================================
-// דף שיחה בודדת
+// דף שיחה בודדת — WhatsApp style
 // =============================================
 export default function ChatPage() {
   const { chatId } = useParams();
@@ -311,16 +311,21 @@ export default function ChatPage() {
   const navigate = useNavigate();
   const [messages, setMessages] = useState([]);
   const [otherUser, setOtherUser] = useState(null);
+  const [otherOnline, setOtherOnline] = useState(false);
+  const [otherTyping, setOtherTyping] = useState(false);
   const [text, setText] = useState('');
-  const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const bottomRef = useRef(null);
   const fileInputRef = useRef(null);
+  const channelRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
+  const otherUserIdRef = useRef(null);
 
   const canUseChat = profile &&
     (profile.role === 'admin' || profile.role === 'writer' || (profile.received_likes_count || 0) >= 50);
 
+  // ── טעינת היסטוריה ──────────────────────────────────────
   const loadChat = useCallback(async () => {
     if (!user || !chatId) return;
     const { data: chatData } = await supabase
@@ -338,6 +343,7 @@ export default function ChatPage() {
 
     const other = chatData.user_a === user.id ? chatData.user_b_profile : chatData.user_a_profile;
     setOtherUser(other);
+    otherUserIdRef.current = other.id;
 
     const { data: msgs } = await supabase
       .from('chat_messages')
@@ -355,38 +361,117 @@ export default function ChatPage() {
       .eq('is_read', false);
   }, [chatId, user, navigate]);
 
+  // ── Realtime: הודעות + Presence (אונליין + הקלדה) ────────
   useEffect(() => {
-    if (!user) { navigate('/auth'); return; }
+    if (!user || !chatId) return;
     if (!canUseChat) { navigate('/chats'); return; }
+
     loadChat();
 
-    // Real-time subscription
-    const channel = supabase
-      .channel(`chat:${chatId}`)
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'chat_messages',
-        filter: `chat_id=eq.${chatId}`
-      }, async (payload) => {
-        setMessages(prev => [...prev, payload.new]);
-        if (payload.new.sender_id !== user.id) {
-          await supabase.from('chat_messages').update({ is_read: true }).eq('id', payload.new.id);
-        }
-      })
-      .subscribe();
+    const channel = supabase.channel(`chat_room:${chatId}`, {
+      config: { presence: { key: user.id } },
+    });
+    channelRef.current = channel;
 
-    return () => supabase.removeChannel(channel);
-  }, [chatId, user, canUseChat, loadChat, navigate]);
+    // הודעות חדשות מה-DB
+    channel.on('postgres_changes', {
+      event: 'INSERT', schema: 'public', table: 'chat_messages',
+      filter: `chat_id=eq.${chatId}`,
+    }, async (payload) => {
+      const msg = payload.new;
+      // אם ההודעה שלנו — כבר הוספנו אותה optimistically, רק נעדכן את ה-id האמיתי
+      setMessages(prev => {
+        const tempIdx = prev.findIndex(m => m._temp && m.content === msg.content && m.sender_id === msg.sender_id);
+        if (tempIdx !== -1) {
+          const updated = [...prev];
+          updated[tempIdx] = msg;
+          return updated;
+        }
+        // הודעה של הצד השני
+        return [...prev, msg];
+      });
+      if (msg.sender_id !== user.id) {
+        await supabase.from('chat_messages').update({ is_read: true }).eq('id', msg.id);
+        // עדכן ✓✓ בהודעות שלנו
+        setMessages(prev => prev.map(m =>
+          m.sender_id === user.id ? { ...m, is_read: true } : m
+        ));
+      }
+    });
+
+    // עדכון is_read של ההודעות שלנו (הצד השני קרא)
+    channel.on('postgres_changes', {
+      event: 'UPDATE', schema: 'public', table: 'chat_messages',
+      filter: `chat_id=eq.${chatId}`,
+    }, (payload) => {
+      setMessages(prev => prev.map(m => m.id === payload.new.id ? { ...m, ...payload.new } : m));
+    });
+
+    // Presence — אונליין
+    channel.on('presence', { event: 'sync' }, () => {
+      const state = channel.presenceState();
+      const others = Object.keys(state).filter(k => k !== user.id);
+      setOtherOnline(others.length > 0);
+    });
+
+    // Broadcast — הקלדה
+    channel.on('broadcast', { event: 'typing' }, ({ payload }) => {
+      if (payload.userId !== user.id) {
+        setOtherTyping(payload.isTyping);
+      }
+    });
+
+    channel.subscribe(async (status) => {
+      if (status === 'SUBSCRIBED') {
+        await channel.track({ online_at: new Date().toISOString() });
+      }
+    });
+
+    return () => {
+      supabase.removeChannel(channel);
+      channelRef.current = null;
+    };
+  }, [chatId, user?.id]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, otherTyping]);
 
+  // ── שליחת אינדיקטור הקלדה ───────────────────────────────
+  function handleTyping(e) {
+    setText(e.target.value);
+    if (!channelRef.current) return;
+    channelRef.current.send({ type: 'broadcast', event: 'typing', payload: { userId: user.id, isTyping: true } });
+    clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = setTimeout(() => {
+      channelRef.current?.send({ type: 'broadcast', event: 'typing', payload: { userId: user.id, isTyping: false } });
+    }, 1500);
+  }
+
+  // ── שליחת הודעת טקסט — Optimistic ───────────────────────
   async function sendMessage(content = null, fileUrl = null, fileType = null, fileName = null) {
     if (!content?.trim() && !fileUrl) return;
-    setSending(true);
-    setError('');
+
+    // עצור אינדיקטור הקלדה
+    clearTimeout(typingTimeoutRef.current);
+    channelRef.current?.send({ type: 'broadcast', event: 'typing', payload: { userId: user.id, isTyping: false } });
+
+    // הוסף מיד ל-UI (optimistic)
+    const tempMsg = {
+      _temp: true,
+      id: `temp_${Date.now()}`,
+      chat_id: chatId,
+      sender_id: user.id,
+      content: content?.trim() || null,
+      file_url: fileUrl,
+      file_type: fileType,
+      file_name: fileName,
+      is_read: false,
+      created_at: new Date().toISOString(),
+    };
+    setMessages(prev => [...prev, tempMsg]);
+    setText('');
+
     const { error: err } = await supabase.from('chat_messages').insert({
       chat_id: chatId,
       sender_id: user.id,
@@ -395,15 +480,16 @@ export default function ChatPage() {
       file_type: fileType,
       file_name: fileName,
     });
-    if (err) { setError('שגיאה בשליחה'); }
-    else {
-      setText('');
-      // עדכן last_message_at
+
+    if (err) {
+      setError('שגיאה בשליחה');
+      setMessages(prev => prev.filter(m => m.id !== tempMsg.id));
+    } else {
       await supabase.from('chats').update({ last_message_at: new Date().toISOString() }).eq('id', chatId);
     }
-    setSending(false);
   }
 
+  // ── העלאת קובץ ──────────────────────────────────────────
   async function handleFileUpload(e) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -436,113 +522,246 @@ export default function ChatPage() {
   const { label: otherLabel, color: otherColor } = otherUser ? getRoleBadge(otherUser.role) : { label: '', color: '#94a3b8' };
 
   return (
-    <main className="page-content" style={{ height: 'calc(100vh - 140px)', display: 'flex', flexDirection: 'column' }}>
-      <div className="container" style={{ maxWidth: 720, flex: 1, display: 'flex', flexDirection: 'column' }}>
+    <main className="page-content" style={{ height: 'calc(100vh - 130px)', display: 'flex', flexDirection: 'column', padding: 0 }}>
+      <div style={{ maxWidth: 720, width: '100%', margin: '0 auto', flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
 
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '1rem 0', borderBottom: '1px solid var(--border)', marginBottom: '0.5rem' }}>
-          <button className="btn btn-ghost btn-sm" onClick={() => navigate('/chats')}>← חזרה</button>
+        {/* ── Header ────────────────────────────────────── */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '0.75rem',
+          padding: '0.75rem 1rem',
+          background: 'var(--bg-card)',
+          borderBottom: '1px solid var(--border)',
+          flexShrink: 0,
+        }}>
+          <button className="btn btn-ghost btn-sm" onClick={() => navigate('/chats')} style={{ padding: '0.4rem 0.6rem' }}>←</button>
           {otherUser && (
             <>
-              <div style={{ width: 38, height: 38, borderRadius: '50%', background: otherColor,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontWeight: 800, color: '#fff', fontSize: '1rem' }}>
-                {(otherUser.display_name || '?')[0].toUpperCase()}
+              <div style={{ position: 'relative', flexShrink: 0 }}>
+                <div style={{
+                  width: 42, height: 42, borderRadius: '50%', background: otherColor,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontWeight: 800, color: '#fff', fontSize: '1.1rem',
+                }}>
+                  {(otherUser.display_name || '?')[0].toUpperCase()}
+                </div>
+                {/* נקודה ירוקה אונליין */}
+                <span style={{
+                  position: 'absolute', bottom: 1, left: 1,
+                  width: 11, height: 11, borderRadius: '50%',
+                  background: otherOnline ? '#22c55e' : '#94a3b8',
+                  border: '2px solid var(--bg-card)',
+                  transition: 'background 0.3s',
+                }} />
               </div>
-              <div>
-                <strong>{otherUser.display_name}</strong>
-                <span className="badge" style={{ color: otherColor, borderColor: otherColor+'40', background: otherColor+'15', fontSize: '0.7rem', marginRight: '0.4rem' }}>{otherLabel}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: '0.97rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  {otherUser.display_name}
+                  <span className="badge" style={{ color: otherColor, borderColor: otherColor+'40', background: otherColor+'15', fontSize: '0.68rem' }}>{otherLabel}</span>
+                </div>
+                <div style={{ fontSize: '0.75rem', color: otherTyping ? '#22c55e' : (otherOnline ? '#22c55e' : 'var(--text-muted)'), transition: 'color 0.2s' }}>
+                  {otherTyping ? '✍️ מקליד...' : otherOnline ? '● מחובר' : '⚬ לא מחובר'}
+                </div>
               </div>
             </>
           )}
         </div>
 
-        {/* Messages */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0.5rem 0', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+        {/* ── אזור הודעות ───────────────────────────────── */}
+        <div style={{
+          flex: 1, overflowY: 'auto',
+          padding: '1rem',
+          display: 'flex', flexDirection: 'column', gap: '0.35rem',
+          background: 'var(--bg)',
+        }}>
           {messages.length === 0 && (
-            <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '3rem' }}>
-              <div style={{ fontSize: '2.5rem' }}>💬</div>
-              <p>התחל שיחה!</p>
+            <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '4rem' }}>
+              <div style={{ fontSize: '3rem' }}>💬</div>
+              <p style={{ marginTop: '0.5rem' }}>התחל שיחה!</p>
             </div>
           )}
-          {messages.map(msg => {
+
+          {messages.map((msg, idx) => {
             const isMine = msg.sender_id === user.id;
+            const isTemp = !!msg._temp;
+            const prevMsg = messages[idx - 1];
+            const showDateSep = !prevMsg || new Date(msg.created_at).toDateString() !== new Date(prevMsg.created_at).toDateString();
+
+            // זמן בפורמט ווצאפ
+            const timeStr = new Date(msg.created_at).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+
             return (
-              <div key={msg.id} style={{ display: 'flex', justifyContent: isMine ? 'flex-start' : 'flex-end' }}>
-                <div style={{
-                  maxWidth: '70%', padding: '0.6rem 0.9rem',
-                  borderRadius: isMine ? '1rem 1rem 1rem 0.2rem' : '1rem 1rem 0.2rem 1rem',
-                  background: isMine ? 'var(--bg-card)' : 'var(--accent)',
-                  color: isMine ? 'var(--text-primary)' : '#fff',
-                  border: isMine ? '1px solid var(--border)' : 'none',
-                  fontSize: '0.9rem', lineHeight: 1.4,
-                }}>
-                  {/* קובץ */}
-                  {msg.file_url && msg.file_type === 'image' && (
-                    <img src={msg.file_url} alt={msg.file_name} style={{ maxWidth: '100%', borderRadius: '0.5rem', marginBottom: msg.content ? '0.4rem' : 0 }} />
+              <React.Fragment key={msg.id}>
+                {/* הפרדת תאריך */}
+                {showDateSep && (
+                  <div style={{ textAlign: 'center', margin: '0.75rem 0 0.25rem' }}>
+                    <span style={{
+                      background: 'var(--bg-card)', border: '1px solid var(--border)',
+                      borderRadius: '999px', padding: '0.2rem 0.8rem',
+                      fontSize: '0.72rem', color: 'var(--text-muted)',
+                    }}>
+                      {new Date(msg.created_at).toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'long' })}
+                    </span>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: isMine ? 'flex-end' : 'flex-start', alignItems: 'flex-end', gap: '0.4rem' }}>
+                  {/* אווטאר צד שני */}
+                  {!isMine && (
+                    <div style={{
+                      width: 28, height: 28, borderRadius: '50%', background: otherColor,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: '0.75rem', fontWeight: 800, color: '#fff', flexShrink: 0, marginBottom: 2,
+                    }}>
+                      {(otherUser?.display_name || '?')[0].toUpperCase()}
+                    </div>
                   )}
-                  {msg.file_url && msg.file_type === 'video' && (
-                    <video src={msg.file_url} controls style={{ maxWidth: '100%', borderRadius: '0.5rem', marginBottom: msg.content ? '0.4rem' : 0 }} />
-                  )}
-                  {msg.file_url && msg.file_type === 'audio' && (
-                    <audio src={msg.file_url} controls style={{ width: '100%', marginBottom: msg.content ? '0.4rem' : 0 }} />
-                  )}
-                  {msg.file_url && (msg.file_type === 'zip' || msg.file_type === 'file') && (
-                    <a href={msg.file_url} target="_blank" rel="noopener noreferrer"
-                      style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: isMine ? 'var(--accent)' : '#fff', textDecoration: 'underline', marginBottom: msg.content ? '0.4rem' : 0 }}>
-                      {fileTypeIcon(msg.file_type)} {msg.file_name || 'הורדת קובץ'}
-                    </a>
-                  )}
-                  {/* טקסט */}
-                  {msg.content && <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</span>}
-                  <div style={{ fontSize: '0.7rem', opacity: 0.6, marginTop: '0.3rem', textAlign: 'left' }}>
-                    {timeAgo(msg.created_at)}
-                    {isMine && <span style={{ marginRight: '0.3rem' }}>{msg.is_read ? ' ✓✓' : ' ✓'}</span>}
+
+                  {/* בלון ההודעה */}
+                  <div style={{
+                    maxWidth: '72%',
+                    padding: '0.5rem 0.8rem 0.35rem',
+                    borderRadius: isMine
+                      ? '1.1rem 1.1rem 0.2rem 1.1rem'
+                      : '1.1rem 1.1rem 1.1rem 0.2rem',
+                    background: isMine ? '#dcf8c6' : 'var(--bg-card)',
+                    color: '#111',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
+                    opacity: isTemp ? 0.7 : 1,
+                    transition: 'opacity 0.2s',
+                    fontSize: '0.92rem', lineHeight: 1.45,
+                    position: 'relative',
+                  }}>
+                    {/* קבצים */}
+                    {msg.file_url && msg.file_type === 'image' && (
+                      <img src={msg.file_url} alt={msg.file_name}
+                        style={{ maxWidth: '100%', borderRadius: '0.6rem', display: 'block', marginBottom: msg.content ? '0.4rem' : '0.2rem' }} />
+                    )}
+                    {msg.file_url && msg.file_type === 'video' && (
+                      <video src={msg.file_url} controls
+                        style={{ maxWidth: '100%', borderRadius: '0.6rem', display: 'block', marginBottom: msg.content ? '0.4rem' : '0.2rem' }} />
+                    )}
+                    {msg.file_url && msg.file_type === 'audio' && (
+                      <audio src={msg.file_url} controls style={{ width: '100%', marginBottom: msg.content ? '0.4rem' : '0.2rem' }} />
+                    )}
+                    {msg.file_url && (msg.file_type === 'zip' || msg.file_type === 'file') && (
+                      <a href={msg.file_url} target="_blank" rel="noopener noreferrer"
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#1d4ed8', marginBottom: msg.content ? '0.4rem' : '0.2rem' }}>
+                        {fileTypeIcon(msg.file_type)} {msg.file_name || 'הורדת קובץ'}
+                      </a>
+                    )}
+
+                    {/* טקסט */}
+                    {msg.content && (
+                      <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</span>
+                    )}
+
+                    {/* שעה + סטטוס */}
+                    <div style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+                      gap: '0.2rem', marginTop: '0.2rem',
+                      fontSize: '0.68rem', color: '#888', whiteSpace: 'nowrap',
+                    }}>
+                      <span>{timeStr}</span>
+                      {isMine && (
+                        <span style={{ color: msg.is_read ? '#4fc3f7' : '#aaa', fontSize: '0.8rem' }}>
+                          {isTemp ? '🕐' : msg.is_read ? '✓✓' : '✓'}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
+              </React.Fragment>
             );
           })}
+
+          {/* אינדיקטור הקלדה */}
+          {otherTyping && (
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: '0.4rem' }}>
+              <div style={{
+                width: 28, height: 28, borderRadius: '50%', background: otherColor,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: '0.75rem', fontWeight: 800, color: '#fff', flexShrink: 0,
+              }}>
+                {(otherUser?.display_name || '?')[0].toUpperCase()}
+              </div>
+              <div style={{
+                padding: '0.55rem 0.9rem',
+                borderRadius: '1.1rem 1.1rem 1.1rem 0.2rem',
+                background: 'var(--bg-card)',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
+                display: 'flex', alignItems: 'center', gap: '4px',
+              }}>
+                {[0, 1, 2].map(i => (
+                  <span key={i} style={{
+                    width: 7, height: 7, borderRadius: '50%', background: '#aaa',
+                    display: 'inline-block',
+                    animation: 'typingBounce 1.2s infinite',
+                    animationDelay: `${i * 0.2}s`,
+                  }} />
+                ))}
+              </div>
+            </div>
+          )}
+
           <div ref={bottomRef} />
         </div>
 
-        {/* Input */}
-        {error && <div className="alert alert-error" style={{ marginBottom: '0.5rem', fontSize: '0.85rem' }}>{error}</div>}
-        <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
-          <input
-            type="file"
-            ref={fileInputRef}
-            style={{ display: 'none' }}
-            accept="image/*,video/*,audio/*,.zip,application/zip"
-            onChange={handleFileUpload}
-          />
-          <button
-            className="btn btn-ghost btn-sm"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploading || sending}
-            title="שלח קובץ (תמונה / וידאו / אודיו / ZIP)"
-            style={{ padding: '0.5rem 0.7rem', fontSize: '1.2rem' }}
-          >
-            {uploading ? <div className="spinner" style={{ width: 16, height: 16 }} /> : '📎'}
-          </button>
-          <textarea
-            className="form-input"
-            value={text}
-            onChange={e => setText(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="כתוב הודעה... (Enter לשליחה)"
-            rows={1}
-            style={{ flex: 1, resize: 'none', minHeight: 40, maxHeight: 120 }}
-          />
-          <button
-            className="btn btn-primary btn-sm"
-            onClick={() => sendMessage(text)}
-            disabled={sending || (!text.trim())}
-            style={{ padding: '0.5rem 0.9rem' }}
-          >
-            {sending ? <div className="spinner" style={{ width: 14, height: 14 }} /> : '➤'}
-          </button>
+        {/* ── Input bar ─────────────────────────────────── */}
+        <div style={{
+          padding: '0.6rem 0.75rem',
+          background: 'var(--bg-card)',
+          borderTop: '1px solid var(--border)',
+          flexShrink: 0,
+        }}>
+          {error && <div style={{ color: '#ef4444', fontSize: '0.8rem', marginBottom: '0.4rem' }}>{error}</div>}
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
+            <input type="file" ref={fileInputRef} style={{ display: 'none' }}
+              accept="image/*,video/*,audio/*,.zip,application/zip"
+              onChange={handleFileUpload} />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              title="שלח קובץ"
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                fontSize: '1.35rem', padding: '0.3rem', lineHeight: 1,
+                opacity: uploading ? 0.5 : 1,
+              }}
+            >
+              {uploading ? <div className="spinner" style={{ width: 18, height: 18 }} /> : '📎'}
+            </button>
+            <textarea
+              className="form-input"
+              value={text}
+              onChange={handleTyping}
+              onKeyDown={handleKeyDown}
+              placeholder="הודעה..."
+              rows={1}
+              style={{ flex: 1, resize: 'none', minHeight: 40, maxHeight: 130, borderRadius: '1.5rem', padding: '0.55rem 1rem' }}
+            />
+            <button
+              onClick={() => sendMessage(text)}
+              disabled={!text.trim()}
+              style={{
+                width: 42, height: 42, borderRadius: '50%',
+                background: text.trim() ? '#25d366' : '#ccc',
+                border: 'none', cursor: text.trim() ? 'pointer' : 'default',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: '1.1rem', transition: 'background 0.2s', flexShrink: 0,
+              }}
+            >
+              ➤
+            </button>
+          </div>
         </div>
+
+        {/* אנימציית נקודות הקלדה */}
+        <style>{`
+          @keyframes typingBounce {
+            0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+            30% { transform: translateY(-5px); opacity: 1; }
+          }
+        `}</style>
       </div>
     </main>
   );
