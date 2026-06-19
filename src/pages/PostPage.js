@@ -191,7 +191,7 @@ export default function PostPage() {
               )}
               <h1 style={{ marginBottom:'1rem' }}>{post.title}</h1>
               <div style={{ display:'flex', gap:'1.2rem', flexWrap:'wrap', color:'var(--text-muted)', fontSize:'0.88rem', marginBottom:'1rem' }}>
-                <span>✍️ {post.profiles?.display_name || 'אנונימי'}</span>
+                <Link to={`/user/${post.profiles?.id}`} style={{ color:'var(--text-muted)', textDecoration:'none' }}>✍️ {post.profiles?.display_name || 'אנונימי'}</Link>
                 <span>📅 {formatDate(post.published_at || post.created_at)}</span>
                 <span>👁 {post.views_count} צפיות</span>
                 <span>💬 {comments.length} תגובות</span>
