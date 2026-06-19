@@ -567,11 +567,13 @@ export default function ChatPage() {
         </div>
 
         {/* ── אזור הודעות ───────────────────────────────── */}
+        {/* direction: rtl כדי שהעברית תהיה נכונה — ההודעות שלי מימין, שלו משמאל */}
         <div style={{
           flex: 1, overflowY: 'auto',
           padding: '1rem',
-          display: 'flex', flexDirection: 'column', gap: '0.35rem',
-          background: 'var(--bg)',
+          display: 'flex', flexDirection: 'column', gap: '0.4rem',
+          background: 'var(--bg-primary)',
+          direction: 'rtl',
         }}>
           {messages.length === 0 && (
             <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '4rem' }}>
@@ -581,22 +583,29 @@ export default function ChatPage() {
           )}
 
           {messages.map((msg, idx) => {
+            // isMine = ההודעה שלי → מימין (justify flex-end ב-RTL = ימין)
             const isMine = msg.sender_id === user.id;
             const isTemp = !!msg._temp;
             const prevMsg = messages[idx - 1];
-            const showDateSep = !prevMsg || new Date(msg.created_at).toDateString() !== new Date(prevMsg.created_at).toDateString();
-
-            // זמן בפורמט ווצאפ
+            const showDateSep = !prevMsg ||
+              new Date(msg.created_at).toDateString() !== new Date(prevMsg.created_at).toDateString();
             const timeStr = new Date(msg.created_at).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+
+            // צבעי בלון — dark mode
+            // שלי: אדום/accent מעומעם כהה עם טקסט בהיר
+            // שלו: כרטיס כהה עם טקסט בהיר
+            const bubbleBg    = isMine ? 'rgba(230,57,70,0.22)' : 'var(--bg-card)';
+            const bubbleBorder= isMine ? '1px solid rgba(230,57,70,0.35)' : '1px solid var(--border)';
+            const bubbleColor = 'var(--text-primary)'; // תמיד בהיר — מתאים לדארק מוד
 
             return (
               <React.Fragment key={msg.id}>
                 {/* הפרדת תאריך */}
                 {showDateSep && (
-                  <div style={{ textAlign: 'center', margin: '0.75rem 0 0.25rem' }}>
+                  <div style={{ textAlign: 'center', margin: '0.75rem 0 0.3rem' }}>
                     <span style={{
                       background: 'var(--bg-card)', border: '1px solid var(--border)',
-                      borderRadius: '999px', padding: '0.2rem 0.8rem',
+                      borderRadius: '999px', padding: '0.2rem 0.9rem',
                       fontSize: '0.72rem', color: 'var(--text-muted)',
                     }}>
                       {new Date(msg.created_at).toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'long' })}
@@ -604,13 +613,24 @@ export default function ChatPage() {
                   </div>
                 )}
 
-                <div style={{ display: 'flex', justifyContent: isMine ? 'flex-end' : 'flex-start', alignItems: 'flex-end', gap: '0.4rem' }}>
-                  {/* אווטאר צד שני */}
+                {/*
+                  RTL: justify-content flex-start = שמאל (המשתמש השני)
+                        justify-content flex-end   = ימין (אני)
+                  לכן: isMine → flex-end (ימין) ✓
+                */}
+                <div style={{
+                  display: 'flex',
+                  justifyContent: isMine ? 'flex-end' : 'flex-start',
+                  alignItems: 'flex-end',
+                  gap: '0.4rem',
+                }}>
+                  {/* אווטאר שמאל — הצד השני */}
                   {!isMine && (
                     <div style={{
                       width: 28, height: 28, borderRadius: '50%', background: otherColor,
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontSize: '0.75rem', fontWeight: 800, color: '#fff', flexShrink: 0, marginBottom: 2,
+                      fontSize: '0.75rem', fontWeight: 800, color: '#fff',
+                      flexShrink: 0, marginBottom: 2,
                     }}>
                       {(otherUser?.display_name || '?')[0].toUpperCase()}
                     </div>
@@ -619,54 +639,63 @@ export default function ChatPage() {
                   {/* בלון ההודעה */}
                   <div style={{
                     maxWidth: '72%',
-                    padding: '0.5rem 0.8rem 0.35rem',
+                    padding: '0.5rem 0.85rem 0.35rem',
                     borderRadius: isMine
-                      ? '1.1rem 1.1rem 0.2rem 1.1rem'
-                      : '1.1rem 1.1rem 1.1rem 0.2rem',
-                    background: isMine ? '#dcf8c6' : 'var(--bg-card)',
-                    color: '#111',
-                    boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
-                    opacity: isTemp ? 0.7 : 1,
-                    transition: 'opacity 0.2s',
-                    fontSize: '0.92rem', lineHeight: 1.45,
-                    position: 'relative',
+                      ? '1.1rem 0.25rem 1.1rem 1.1rem'   // פינה תחתון-ימין שטוחה (ימין = שלי ב-RTL)
+                      : '0.25rem 1.1rem 1.1rem 1.1rem',  // פינה תחתון-שמאל שטוחה (שמאל = שלו)
+                    background: bubbleBg,
+                    border: bubbleBorder,
+                    color: bubbleColor,
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                    opacity: isTemp ? 0.65 : 1,
+                    transition: 'opacity 0.15s',
+                    fontSize: '0.92rem', lineHeight: 1.5,
                   }}>
-                    {/* קבצים */}
+                    {/* תמונה */}
                     {msg.file_url && msg.file_type === 'image' && (
                       <img src={msg.file_url} alt={msg.file_name}
-                        style={{ maxWidth: '100%', borderRadius: '0.6rem', display: 'block', marginBottom: msg.content ? '0.4rem' : '0.2rem' }} />
+                        style={{ maxWidth: '100%', borderRadius: '0.6rem', display: 'block', marginBottom: msg.content ? '0.4rem' : '0.25rem' }} />
                     )}
+                    {/* וידאו */}
                     {msg.file_url && msg.file_type === 'video' && (
                       <video src={msg.file_url} controls
-                        style={{ maxWidth: '100%', borderRadius: '0.6rem', display: 'block', marginBottom: msg.content ? '0.4rem' : '0.2rem' }} />
+                        style={{ maxWidth: '100%', borderRadius: '0.6rem', display: 'block', marginBottom: msg.content ? '0.4rem' : '0.25rem' }} />
                     )}
+                    {/* אודיו */}
                     {msg.file_url && msg.file_type === 'audio' && (
-                      <audio src={msg.file_url} controls style={{ width: '100%', marginBottom: msg.content ? '0.4rem' : '0.2rem' }} />
+                      <audio src={msg.file_url} controls
+                        style={{ width: '100%', marginBottom: msg.content ? '0.4rem' : '0.25rem' }} />
                     )}
+                    {/* קובץ / ZIP */}
                     {msg.file_url && (msg.file_type === 'zip' || msg.file_type === 'file') && (
                       <a href={msg.file_url} target="_blank" rel="noopener noreferrer"
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#1d4ed8', marginBottom: msg.content ? '0.4rem' : '0.2rem' }}>
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.4rem',
+                          color: 'var(--accent)', marginBottom: msg.content ? '0.4rem' : '0.25rem' }}>
                         {fileTypeIcon(msg.file_type)} {msg.file_name || 'הורדת קובץ'}
                       </a>
                     )}
 
                     {/* טקסט */}
                     {msg.content && (
-                      <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</span>
+                      <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--text-primary)' }}>
+                        {msg.content}
+                      </span>
                     )}
 
-                    {/* שעה + סטטוס */}
+                    {/* שעה + V V */}
                     <div style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
-                      gap: '0.2rem', marginTop: '0.2rem',
-                      fontSize: '0.68rem', color: '#888', whiteSpace: 'nowrap',
+                      display: 'flex', alignItems: 'center',
+                      justifyContent: 'flex-start', // ב-RTL זה ימין בפועל (תחתית הבלון)
+                      gap: '0.25rem', marginTop: '0.25rem',
+                      fontSize: '0.67rem', color: 'var(--text-muted)',
+                      whiteSpace: 'nowrap',
                     }}>
-                      <span>{timeStr}</span>
                       {isMine && (
-                        <span style={{ color: msg.is_read ? '#4fc3f7' : '#aaa', fontSize: '0.8rem' }}>
+                        <span style={{ color: msg.is_read ? '#4fc3f7' : 'var(--text-muted)' }}>
                           {isTemp ? '🕐' : msg.is_read ? '✓✓' : '✓'}
                         </span>
                       )}
+                      <span>{timeStr}</span>
                     </div>
                   </div>
                 </div>
@@ -674,9 +703,9 @@ export default function ChatPage() {
             );
           })}
 
-          {/* אינדיקטור הקלדה */}
+          {/* אינדיקטור הקלדה — צד שמאל (המשתמש השני) */}
           {otherTyping && (
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: '0.4rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'flex-end', gap: '0.4rem' }}>
               <div style={{
                 width: 28, height: 28, borderRadius: '50%', background: otherColor,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -685,15 +714,17 @@ export default function ChatPage() {
                 {(otherUser?.display_name || '?')[0].toUpperCase()}
               </div>
               <div style={{
-                padding: '0.55rem 0.9rem',
-                borderRadius: '1.1rem 1.1rem 1.1rem 0.2rem',
+                padding: '0.6rem 1rem',
+                borderRadius: '0.25rem 1.1rem 1.1rem 1.1rem',
                 background: 'var(--bg-card)',
-                boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
-                display: 'flex', alignItems: 'center', gap: '4px',
+                border: '1px solid var(--border)',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                display: 'flex', alignItems: 'center', gap: '5px',
               }}>
                 {[0, 1, 2].map(i => (
                   <span key={i} style={{
-                    width: 7, height: 7, borderRadius: '50%', background: '#aaa',
+                    width: 7, height: 7, borderRadius: '50%',
+                    background: 'var(--text-muted)',
                     display: 'inline-block',
                     animation: 'typingBounce 1.2s infinite',
                     animationDelay: `${i * 0.2}s`,
@@ -708,28 +739,35 @@ export default function ChatPage() {
 
         {/* ── Input bar ─────────────────────────────────── */}
         <div style={{
-          padding: '0.6rem 0.75rem',
+          padding: '0.6rem 0.85rem',
           background: 'var(--bg-card)',
           borderTop: '1px solid var(--border)',
           flexShrink: 0,
+          direction: 'rtl',
         }}>
-          {error && <div style={{ color: '#ef4444', fontSize: '0.8rem', marginBottom: '0.4rem' }}>{error}</div>}
+          {error && <div style={{ color: 'var(--accent)', fontSize: '0.8rem', marginBottom: '0.4rem' }}>{error}</div>}
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
             <input type="file" ref={fileInputRef} style={{ display: 'none' }}
               accept="image/*,video/*,audio/*,.zip,application/zip"
               onChange={handleFileUpload} />
+
+            {/* כפתור קובץ */}
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
-              title="שלח קובץ"
+              title="שלח קובץ (תמונה / וידאו / אודיו / ZIP)"
               style={{
-                background: 'none', border: 'none', cursor: 'pointer',
-                fontSize: '1.35rem', padding: '0.3rem', lineHeight: 1,
-                opacity: uploading ? 0.5 : 1,
+                background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+                borderRadius: '50%', width: 40, height: 40,
+                cursor: uploading ? 'not-allowed' : 'pointer',
+                fontSize: '1.15rem', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                opacity: uploading ? 0.5 : 1, flexShrink: 0, color: 'var(--text-secondary)',
               }}
             >
-              {uploading ? <div className="spinner" style={{ width: 18, height: 18 }} /> : '📎'}
+              {uploading ? <div className="spinner" style={{ width: 16, height: 16 }} /> : '📎'}
             </button>
+
+            {/* שדה טקסט */}
             <textarea
               className="form-input"
               value={text}
@@ -737,28 +775,38 @@ export default function ChatPage() {
               onKeyDown={handleKeyDown}
               placeholder="הודעה..."
               rows={1}
-              style={{ flex: 1, resize: 'none', minHeight: 40, maxHeight: 130, borderRadius: '1.5rem', padding: '0.55rem 1rem' }}
+              style={{
+                flex: 1, resize: 'none', minHeight: 42, maxHeight: 130,
+                borderRadius: '1.4rem', padding: '0.6rem 1rem',
+                direction: 'rtl', textAlign: 'right',
+                background: 'var(--bg-secondary)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border)',
+              }}
             />
+
+            {/* כפתור שליחה */}
             <button
               onClick={() => sendMessage(text)}
               disabled={!text.trim()}
               style={{
-                width: 42, height: 42, borderRadius: '50%',
-                background: text.trim() ? '#25d366' : '#ccc',
-                border: 'none', cursor: text.trim() ? 'pointer' : 'default',
+                width: 42, height: 42, borderRadius: '50%', flexShrink: 0,
+                background: text.trim() ? 'var(--accent)' : 'var(--bg-secondary)',
+                border: `1px solid ${text.trim() ? 'var(--accent)' : 'var(--border)'}`,
+                cursor: text.trim() ? 'pointer' : 'default',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: '1.1rem', transition: 'background 0.2s', flexShrink: 0,
+                fontSize: '1rem', color: text.trim() ? '#fff' : 'var(--text-muted)',
+                transition: 'all 0.2s',
+                transform: 'scaleX(-1)', // הפוך את החץ לכיוון RTL
               }}
-            >
-              ➤
-            </button>
+            >➤</button>
           </div>
         </div>
 
         {/* אנימציית נקודות הקלדה */}
         <style>{`
           @keyframes typingBounce {
-            0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+            0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
             30% { transform: translateY(-5px); opacity: 1; }
           }
         `}</style>
