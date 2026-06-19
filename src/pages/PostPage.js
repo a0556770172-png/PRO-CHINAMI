@@ -4,12 +4,39 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDate, timeAgo, getRoleBadge, EMOJIS } from '../lib/utils';
 
-// ===== זיהוי לינק יוטיוב וחילוץ ה-ID (מוגדר כאן מקומית כדי לא להיות תלוי בתוכן utils.js) =====
+// ===== זיהוי לינק יוטיוב וחילוץ ה-ID =====
 function getYouTubeId(url) {
   if (!url) return null;
   const pattern = /(?:youtube\.com\/watch\?v=|youtube\.com\/embed\/|youtube\.com\/v\/|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/;
   const match = url.match(pattern);
   return match ? match[1] : null;
+}
+
+// ===== לוגיקת ספירת צפיות חכמה =====
+// משתמש מחובר  → בדיקה + שמירה ב-DB (post_views), חסין לרענון וטאבים חדשים
+// אורח (לא מחובר) → sessionStorage בלבד (לא ניתן לזהות)
+async function recordView(postId, userId) {
+  if (userId) {
+    // בדוק אם המשתמש כבר צפה — INSERT עם ON CONFLICT DO NOTHING מחזיר affected=0
+    const { error } = await supabase
+      .from('post_views')
+      .insert({ post_id: postId, user_id: userId })
+      .select();
+
+    // אם error.code === '23505' → כבר צפה → לא מוסיפים
+    if (!error) {
+      // הכנסה הצליחה — משתמש חדש, עדכן מונה
+      await supabase.rpc('increment_post_views', { post_id: postId });
+    }
+    // אם error (כולל duplicate) — לא עושים כלום
+  } else {
+    // אורח — sessionStorage
+    const key = `viewed_post_${postId}`;
+    if (!sessionStorage.getItem(key)) {
+      await supabase.rpc('increment_post_views', { post_id: postId });
+      sessionStorage.setItem(key, '1');
+    }
+  }
 }
 
 export default function PostPage() {
@@ -33,8 +60,18 @@ export default function PostPage() {
       .single();
     if (error || !data) { navigate('/'); return; }
     setPost(data);
-    // Increment views
-    await supabase.rpc('increment_post_views', { post_id: data.id });
+
+    // ===== ספירת צפייה חכמה =====
+    await recordView(data.id, user?.id ?? null);
+
+    // טען את הצפיות העדכניות אחרי הספירה
+    const { data: freshPost } = await supabase
+      .from('posts')
+      .select('views_count')
+      .eq('id', data.id)
+      .single();
+    if (freshPost) setPost(prev => ({ ...prev, views_count: freshPost.views_count }));
+
     // Load comments
     const { data: comms } = await supabase
       .from('comments')
@@ -42,6 +79,7 @@ export default function PostPage() {
       .eq('post_id', data.id)
       .order('created_at', { ascending: true });
     setComments(comms || []);
+
     // Load likes
     const { data: postLikes } = await supabase
       .from('post_likes')
@@ -168,7 +206,7 @@ export default function PostPage() {
                   style={{ width:'100%', borderRadius:'var(--radius)', marginTop:'1.5rem', objectFit:'cover', maxHeight:'420px' }} />
               )}
 
-              {/* ===== מתוקן: וידאו עטוף בקונטיינר עם יחס תצוגה קבוע ===== */}
+              {/* וידאו */}
               {post.video_url && (
                 <div className="post-video-wrapper">
                   {getYouTubeId(post.video_url) ? (
@@ -189,7 +227,7 @@ export default function PostPage() {
                 </div>
               )}
 
-              {/* ===== מתוקן: קול עטוף בקונטיינר מעוצב ===== */}
+              {/* אודיו */}
               {post.audio_url && (
                 <div className="post-audio-wrapper">
                   <span style={{ fontSize:'1.4rem' }}>🎵</span>
@@ -232,7 +270,6 @@ export default function PostPage() {
                 💬 תגובות <span style={{ fontSize:'0.9rem', color:'var(--text-muted)', fontWeight:400 }}>({comments.length})</span>
               </h3>
 
-              {/* Comment form */}
               {user && canComment ? (
                 <form onSubmit={handleSubmitComment} style={{ marginBottom:'2rem' }}>
                   <div className="form-group" style={{ marginBottom:'0.75rem' }}>
@@ -260,7 +297,6 @@ export default function PostPage() {
                 </div>
               )}
 
-              {/* Comments list */}
               {comments.length === 0 ? (
                 <div className="empty-state" style={{ padding:'2rem' }}>
                   <span className="empty-state-icon">💬</span>
