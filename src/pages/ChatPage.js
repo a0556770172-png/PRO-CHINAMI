@@ -533,7 +533,7 @@ export default function ChatPage() {
           borderBottom: '1px solid var(--border)',
           flexShrink: 0,
         }}>
-          <button className="btn btn-ghost btn-sm" onClick={() => navigate('/chats')} style={{ padding: '0.4rem 0.6rem' }}>←</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => navigate('/chats')} style={{ padding: '0.4rem 0.6rem' }}>→</button>
           {otherUser && (
             <>
               <div style={{ position: 'relative', flexShrink: 0 }}>
