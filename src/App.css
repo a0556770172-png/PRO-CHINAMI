@@ -604,7 +604,8 @@ textarea.form-input { resize: vertical; min-height: 100px; }
   box-shadow: 0 4px 24px rgba(0,0,0,0.4);
 }
 
-.post-video-wrapper video {
+.post-video-wrapper video,
+.post-video-wrapper iframe {
   position: absolute;
   inset: 0;
   width: 100%;
