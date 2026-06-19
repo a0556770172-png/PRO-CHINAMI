@@ -4,6 +4,14 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { slugify } from '../lib/utils';
 
+// ===== חדש: זיהוי לינק יוטיוב וחילוץ ה-ID (מוגדר כאן מקומית, לא תלוי ב-utils.js) =====
+function getYouTubeId(url) {
+  if (!url) return null;
+  const pattern = /(?:youtube\.com\/watch\?v=|youtube\.com\/embed\/|youtube\.com\/v\/|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/;
+  const match = url.match(pattern);
+  return match ? match[1] : null;
+}
+
 export default function WriterPage() {
   const { user, profile, isWriter, isAdmin, canPost } = useAuth();
   const navigate = useNavigate();
@@ -20,6 +28,8 @@ export default function WriterPage() {
   const [loading, setLoading] = useState(false);
   const [uploadingVideo, setUploadingVideo] = useState(false); // ===== חדש =====
   const [uploadingAudio, setUploadingAudio] = useState(false); // ===== חדש =====
+  const [videoSourceType, setVideoSourceType] = useState('upload'); // ===== חדש: 'upload' | 'url' =====
+  const [videoUrlInput, setVideoUrlInput] = useState(''); // ===== חדש =====
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [activeTab, setActiveTab] = useState('write');
@@ -54,6 +64,15 @@ export default function WriterPage() {
         category_id: data.category_id || '',
         tags: (data.tags || []).join(', '), status: data.status
       });
+      // ===== חדש: קביעת סוג מקור הוידאו לפי ה-URL שנשמר =====
+      if (data.video_url) {
+        if (data.video_url.includes('supabase.co/storage')) {
+          setVideoSourceType('upload');
+        } else {
+          setVideoSourceType('url');
+          setVideoUrlInput(data.video_url);
+        }
+      }
       setActiveTab('write');
     }
   }
@@ -91,6 +110,26 @@ export default function WriterPage() {
     e.target.value = '';
   }
 
+  // ===== חדש: אישור קישור URL/יוטיוב לוידאו =====
+  function handleVideoUrlConfirm() {
+    if (!videoUrlInput.trim()) { setError('נא להזין כתובת URL'); return; }
+    setError('');
+    setForm(f => ({ ...f, video_url: videoUrlInput.trim() }));
+  }
+
+  // ===== חדש: הסרת וידאו (גם עבור קובץ וגם עבור URL) =====
+  function clearVideo() {
+    setForm(f => ({ ...f, video_url: '' }));
+    setVideoUrlInput('');
+  }
+
+  // ===== חדש: מעבר בין העלאת קובץ לבין קישור URL =====
+  function switchVideoSourceType(type) {
+    setVideoSourceType(type);
+    setError('');
+    clearVideo();
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     if (!form.title.trim() || !form.content.trim()) { setError('נא למלא כותרת ותוכן'); return; }
@@ -125,6 +164,8 @@ export default function WriterPage() {
           video_url:'', audio_url:'', // ===== חדש =====
           category_id:'', tags:'', status: isAdmin||isWriter?'published':'pending'
         });
+        setVideoUrlInput(''); // ===== חדש =====
+        setVideoSourceType('upload'); // ===== חדש =====
         await loadData();
       }
     }
@@ -202,22 +243,81 @@ export default function WriterPage() {
                 value={form.cover_image} onChange={handleChange} />
             </div>
 
-            {/* ===== חדש: העלאת וידאו ===== */}
+            {/* ===== חדש: וידאו - העלאת קובץ או קישור URL/יוטיוב ===== */}
             <div className="form-group">
               <label className="form-label">🎥 וידאו (אופציונלי)</label>
-              <input
-                type="file"
-                accept="video/*"
-                className="form-input"
-                onChange={e => handleFileUpload(e, 'video_url', setUploadingVideo)}
-                disabled={uploadingVideo}
-              />
+
+              {/* טאבים לבחירת סוג המקור */}
+              <div style={{ display:'flex', gap:'0.4rem', marginBottom:'0.6rem' }}>
+                {[
+                  { key:'upload', label:'📁 העלאת קובץ' },
+                  { key:'url', label:'🔗 קישור URL / יוטיוב' },
+                ].map(opt => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => switchVideoSourceType(opt.key)}
+                    className="btn btn-sm"
+                    style={{
+                      background: videoSourceType === opt.key ? 'var(--bg-card)' : 'transparent',
+                      color: videoSourceType === opt.key ? 'var(--text-primary)' : 'var(--text-muted)',
+                      border: videoSourceType === opt.key ? '1px solid var(--border)' : '1px solid transparent',
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+
+              {videoSourceType === 'upload' && (
+                <input
+                  type="file"
+                  accept="video/*"
+                  className="form-input"
+                  onChange={e => handleFileUpload(e, 'video_url', setUploadingVideo)}
+                  disabled={uploadingVideo}
+                />
+              )}
+
+              {videoSourceType === 'url' && (
+                <div style={{ display:'flex', gap:'0.5rem' }}>
+                  <input
+                    className="form-input"
+                    placeholder="https://www.youtube.com/watch?v=... או קישור ישיר לקובץ וידאו"
+                    value={videoUrlInput}
+                    onChange={e => setVideoUrlInput(e.target.value)}
+                  />
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={handleVideoUrlConfirm}>
+                    אישור
+                  </button>
+                </div>
+              )}
+
+              <span className="form-hint">
+                {videoSourceType === 'url'
+                  ? 'אפשר להדביק קישור יוטיוב (watch / youtu.be / shorts) או קישור ישיר לקובץ וידאו (mp4 וכו׳)'
+                  : 'גודל מקסימלי 50MB'}
+              </span>
+
               {uploadingVideo && <span className="form-hint">⏳ מעלה וידאו...</span>}
+
+              {/* תצוגה מקדימה */}
               {form.video_url && (
                 <div style={{ marginTop:'0.5rem' }}>
-                  <video src={form.video_url} controls style={{ maxWidth:'100%', maxHeight:200, borderRadius:'var(--radius-sm)' }} />
+                  {getYouTubeId(form.video_url) ? (
+                    <div style={{ position:'relative', width:'100%', aspectRatio:'16/9', borderRadius:'var(--radius-sm)', overflow:'hidden' }}>
+                      <iframe
+                        src={`https://www.youtube.com/embed/${getYouTubeId(form.video_url)}`}
+                        style={{ width:'100%', height:'100%', border:'none' }}
+                        allowFullScreen
+                        title="תצוגה מקדימה"
+                      />
+                    </div>
+                  ) : (
+                    <video src={form.video_url} controls style={{ maxWidth:'100%', maxHeight:200, borderRadius:'var(--radius-sm)' }} />
+                  )}
                   <div>
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setForm(f => ({ ...f, video_url:'' }))}>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={clearVideo}>
                       🗑 הסר וידאו
                     </button>
                   </div>
