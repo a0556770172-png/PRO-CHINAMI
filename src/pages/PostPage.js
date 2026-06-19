@@ -159,6 +159,26 @@ export default function PostPage() {
                 <img src={post.cover_image} alt={post.title}
                   style={{ width:'100%', borderRadius:'var(--radius)', marginTop:'1.5rem', objectFit:'cover', maxHeight:'420px' }} />
               )}
+
+              {/* ===== מתוקן: וידאו עטוף בקונטיינר עם יחס תצוגה קבוע ===== */}
+              {post.video_url && (
+                <div className="post-video-wrapper">
+                  <video
+                    src={post.video_url}
+                    controls
+                    preload="metadata"
+                    playsInline
+                  />
+                </div>
+              )}
+
+              {/* ===== מתוקן: קול עטוף בקונטיינר מעוצב ===== */}
+              {post.audio_url && (
+                <div className="post-audio-wrapper">
+                  <span style={{ fontSize:'1.4rem' }}>🎵</span>
+                  <audio src={post.audio_url} controls preload="metadata" />
+                </div>
+              )}
             </header>
 
             {/* Post Body */}
