@@ -9,7 +9,7 @@ const SUPER_ADMIN_EMAIL = ADMIN_EMAIL.toLowerCase();
 export default function AdminPage() {
   const { user, profile, isAdmin, loading } = useAuth();
   const navigate = useNavigate();
-  const [code, setCode] = useState('');
+  const [code, setCode] = useState(''); 
   const [codeVerified, setCodeVerified] = useState(false);
   const [codeError, setCodeError] = useState('');
 
