@@ -7,7 +7,7 @@ import { formatDate, getRoleBadge } from '../lib/utils';
 const SUPER_ADMIN_EMAIL = ADMIN_EMAIL.toLowerCase();
 
 export default function AdminPage() {
-  const { user, profile, isAdmin } = useAuth();
+  const { user, profile, isAdmin, loading } = useAuth();
   const navigate = useNavigate();
   const [code, setCode] = useState('');
   const [codeVerified, setCodeVerified] = useState(false);
@@ -49,8 +49,8 @@ export default function AdminPage() {
   const [adminNoteMsg, setAdminNoteMsg] = useState('');
 
   useEffect(() => {
-    if (!user || !isAdmin) { navigate('/'); return; }
-  }, [user, isAdmin]);
+    if (!loading && (!user || !isAdmin)) { navigate('/'); return; }
+  }, [user, isAdmin, loading]);
 
   function verifyCode(e) {
     e.preventDefault();
@@ -247,6 +247,7 @@ export default function AdminPage() {
     loadChatMessages(selectedChatId);
   }
 
+  if (loading) return <div className="loading-page"><div className="spinner"></div></div>;
   if (!user || !isAdmin) return null;
 
   // ---- CODE VERIFICATION SCREEN ----
