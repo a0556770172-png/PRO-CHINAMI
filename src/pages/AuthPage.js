@@ -1,95 +1,149 @@
-import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { supabase, ADMIN_EMAIL } from '../lib/supabase';
 
-export default function AuthPage() {
-  const { signIn, signUp, user } = useAuth();
-  const navigate = useNavigate();
-  const [mode, setMode] = useState('login'); // 'login' | 'register'
-  const [form, setForm] = useState({ email:'', password:'', displayName:'' });
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [loading, setLoading] = useState(false);
+const AuthContext = createContext({});
 
-  if (user) { navigate('/'); return null; }
+export const useAuth = () => useContext(AuthContext);
 
-  const handleChange = e => setForm(f => ({ ...f, [e.target.name]: e.target.value }));
+export function AuthProvider({ children }) {
+  const [user, setUser] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [siteDisabled, setSiteDisabled] = useState(false);
+  const [disabledMessage, setDisabledMessage] = useState('האתר מושבת זמנית לתחזוקה. נחזור בקרוב!');
 
-  async function handleSubmit(e) {
-    e.preventDefault();
-    setError(''); setSuccess('');
-    if (!form.email || !form.password) { setError('נא למלא את כל השדות'); return; }
-    setLoading(true);
-
-    if (mode === 'login') {
-      const { error } = await signIn(form.email.toLowerCase().trim(), form.password);
-      if (error) setError('שגיאה בהתחברות: ' + (error.message === 'Invalid login credentials' ? 'פרטים שגויים' : error.message));
-      else navigate('/');
-    } else {
-      if (!form.displayName.trim()) { setError('נא להזין שם תצוגה'); setLoading(false); return; }
-      const { error } = await signUp(form.email, form.password, form.displayName);
-      if (error) setError('שגיאה בהרשמה: ' + error.message);
-      else setSuccess('נרשמת בהצלחה! בדוק את המייל לאימות ואז התחבר.');
+  // טעינת הגדרות האתר (פעיל/מושבת)
+  const loadSiteSettings = async () => {
+    try {
+      const { data } = await supabase.from('site_settings').select('*');
+      if (data) {
+        const settings = {};
+        data.forEach(row => { settings[row.key] = row.value; });
+        setSiteDisabled(settings['is_disabled'] === 'true');
+        if (settings['disabled_message']) setDisabledMessage(settings['disabled_message']);
+      }
+    } catch (err) {
+      // טבלה לא קיימת עדיין — מתעלמים
     }
-    setLoading(false);
-  }
+  };
+
+  const fetchProfile = async (userId) => {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+      if (!error && data) {
+        if (data.is_blocked) {
+          await supabase.auth.signOut();
+          setUser(null);
+          setProfile(null);
+          alert('החשבון שלך חסום. פנה למנהל האתר.');
+          return;
+        }
+        setProfile(data);
+        await supabase.rpc('record_user_activity', { p_user_id: userId, p_active_minutes: 1 });
+        await supabase.rpc('auto_upgrade_users');
+      }
+    } catch (err) {
+      console.error('Profile fetch error:', err);
+    }
+  };
+
+  useEffect(() => {
+    loadSiteSettings();
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      if (session?.user) fetchProfile(session.user.id);
+      setLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        await fetchProfile(session.user.id);
+      } else {
+        setProfile(null);
+      }
+    });
+
+    // האזנה לשינויים בהגדרות האתר בזמן אמת
+    const settingsChannel = supabase
+      .channel('site_settings_changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'site_settings' }, () => {
+        loadSiteSettings();
+      })
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+      supabase.removeChannel(settingsChannel);
+    };
+  }, []);
+
+  const signUp = async (email, password, displayName) => {
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { display_name: displayName } }
+    });
+    return { data, error };
+  };
+
+  const signIn = async (email, password) => {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return { data, error };
+
+    const { data: profileData } = await supabase
+      .from('profiles')
+      .select('is_blocked')
+      .eq('id', data.user.id)
+      .single();
+
+    if (profileData?.is_blocked) {
+      await supabase.auth.signOut();
+      return { data: null, error: { message: 'החשבון שלך חסום. פנה למנהל האתר.' } };
+    }
+
+    return { data, error };
+  };
+
+  const signOut = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+    setProfile(null);
+  };
+
+  const updateProfile = async (updates) => {
+    if (!user) return;
+    const { data, error } = await supabase
+      .from('profiles')
+      .update(updates)
+      .eq('id', user.id)
+      .select()
+      .single();
+    if (!error) setProfile(data);
+    return { data, error };
+  };
+
+  const isAdmin = profile?.role === 'admin';
+  const isWriter = profile?.role === 'writer' || isAdmin;
+  const canComment = ['level2', 'level3', 'writer', 'admin'].includes(profile?.role);
+  const canPost = ['writer', 'admin', 'level3'].includes(profile?.role);
+  // מנהל ראשי — רק מהמייל הייעודי
+  const isSuperAdmin = isAdmin && user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
   return (
-    <div className="auth-page">
-      <div className="auth-box">
-        <div style={{ textAlign:'center', marginBottom:'1.5rem' }}>
-          <Link to="/" style={{ display:'inline-flex', alignItems:'center', gap:'0.5rem', marginBottom:'1.5rem' }}>
-            <div style={{ width:40, height:40, background:'var(--accent)', borderRadius:10, display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.2rem' }}>⚔</div>
-            <span style={{ fontFamily:'var(--font-display)', fontSize:'1.4rem', fontWeight:900 }}>חוד <span style={{ color:'var(--accent)' }}>החנית</span></span>
-          </Link>
-          <h1 className="auth-title">{mode === 'login' ? 'ברוך הבא' : 'הצטרף אלינו'}</h1>
-          <p className="auth-subtitle">
-            {mode === 'login' ? 'התחבר לחשבונך' : 'צור חשבון חינמי'}
-          </p>
-        </div>
-
-        <div style={{ display:'flex', gap:'0', marginBottom:'2rem', background:'var(--bg-secondary)', borderRadius:'var(--radius-sm)', padding:'4px' }}>
-          {['login','register'].map(m => (
-            <button key={m} onClick={() => { setMode(m); setError(''); setSuccess(''); }}
-              className="btn" style={{ flex:1, justifyContent:'center',
-                background: mode === m ? 'var(--bg-card)' : 'transparent',
-                color: mode === m ? 'var(--text-primary)' : 'var(--text-muted)',
-                border: mode === m ? '1px solid var(--border)' : '1px solid transparent',
-              }}>
-              {m === 'login' ? 'כניסה' : 'הרשמה'}
-            </button>
-          ))}
-        </div>
-
-        <form onSubmit={handleSubmit} style={{ display:'flex', flexDirection:'column', gap:'1rem' }}>
-          {mode === 'register' && (
-            <div className="form-group">
-              <label className="form-label">שם תצוגה</label>
-              <input name="displayName" type="text" className="form-input"
-                placeholder="איך תרצה להיקרא?" value={form.displayName} onChange={handleChange} />
-            </div>
-          )}
-          <div className="form-group">
-            <label className="form-label">כתובת מייל</label>
-            <input name="email" type="email" className="form-input"
-              placeholder="your@email.com" value={form.email} onChange={handleChange} />
-          </div>
-          <div className="form-group">
-            <label className="form-label">סיסמה</label>
-            <input name="password" type="password" className="form-input"
-              placeholder="לפחות 6 תווים" value={form.password} onChange={handleChange} />
-          </div>
-
-          {error && <div className="alert alert-error">⚠️ {error}</div>}
-          {success && <div className="alert alert-success">✅ {success}</div>}
-
-          <button type="submit" className="btn btn-primary" disabled={loading}
-            style={{ justifyContent:'center', marginTop:'0.5rem', padding:'0.75rem' }}>
-            {loading ? <><div className="spinner" style={{ width:16, height:16 }}></div> מעבד...</>
-              : mode === 'login' ? '🔑 כניסה' : '📝 הרשמה'}
-          </button>
-        </form>
-      </div>
-    </div>
+    <AuthContext.Provider value={{
+      user, profile, loading,
+      signUp, signIn, signOut, updateProfile,
+      isAdmin, isWriter, canComment, canPost, isSuperAdmin,
+      siteDisabled, disabledMessage,
+      fetchProfile
+    }}>
+      {children}
+    </AuthContext.Provider>
   );
 }
