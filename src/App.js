@@ -48,7 +48,7 @@ function AppContent() {
   const location = useLocation();
 
   // תמיד מאפשרים גישה לפאנל הניהול (כדי שהמנהל יוכל להחזיר)
-  const isAdminRoute = location.pathname === '/admin';
+  const isAdminRoute = location.pathname === '/admin' || location.pathname === '/auth';
 
   // המנהל הראשי עובר תמיד, גם כשהאתר מושבת
   if (!loading && siteDisabled && !isSuperAdmin && !isAdminRoute) {
