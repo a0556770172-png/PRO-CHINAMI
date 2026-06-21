@@ -16,7 +16,7 @@ export default function AdminPage() {
   const isSuperAdmin = user?.email?.toLowerCase() === SUPER_ADMIN_EMAIL;
 
   const defaultTabs = ['categories', 'users', 'posts', 'pending'];
-  const superTabs = [...defaultTabs, 'admins', 'site-control', 'impersonate'];
+  const superTabs = [...defaultTabs, 'admins', 'site-control', 'impersonate', 'messages'];
   const [activeTab, setActiveTab] = useState('categories');
 
   // Category state
@@ -40,6 +40,14 @@ export default function AdminPage() {
   const [impersonateData, setImpersonateData] = useState(null);
   const [impersonateLoading, setImpersonateLoading] = useState(false);
 
+  // Private messages (read-only oversight) state
+  const [chatList, setChatList] = useState([]);
+  const [selectedChatId, setSelectedChatId] = useState('');
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatMsgLoading, setChatMsgLoading] = useState(false);
+  const [adminNote, setAdminNote] = useState('');
+  const [adminNoteMsg, setAdminNoteMsg] = useState('');
+
   useEffect(() => {
     if (!user || !isAdmin) { navigate('/'); return; }
   }, [user, isAdmin]);
@@ -54,7 +62,7 @@ export default function AdminPage() {
     loadCategories();
     loadUsers();
     loadPosts();
-    if (isSuperAdmin) loadSiteSettings();
+    if (isSuperAdmin) { loadSiteSettings(); loadChatList(); }
   }
 
   async function loadCategories() {
@@ -199,6 +207,46 @@ export default function AdminPage() {
     setImpersonateLoading(false);
   }
 
+  // ---- SUPER ADMIN: PRIVATE MESSAGES (read-only oversight) ----
+  async function loadChatList() {
+    const { data } = await supabase
+      .from('chats')
+      .select(`id, last_message_at,
+        user_a_profile:profiles!chats_user_a_fkey(id, display_name, email),
+        user_b_profile:profiles!chats_user_b_fkey(id, display_name, email)`)
+      .order('last_message_at', { ascending: false });
+    setChatList(data || []);
+  }
+
+  async function loadChatMessages(chatId) {
+    setSelectedChatId(chatId);
+    setAdminNoteMsg('');
+    if (!chatId) { setChatMessages([]); return; }
+    setChatMsgLoading(true);
+    const { data } = await supabase
+      .from('chat_messages')
+      .select('*, sender:profiles!chat_messages_sender_id_fkey(display_name)')
+      .eq('chat_id', chatId)
+      .order('created_at', { ascending: true });
+    setChatMessages(data || []);
+    setChatMsgLoading(false);
+  }
+
+  // הודעת מנהל גלויה וחתומה — לא בשם משתמש, מופיעה לשני הצדדים בשיחה
+  async function sendAdminNote() {
+    if (!adminNote.trim() || !selectedChatId) return;
+    const { error } = await supabase.from('chat_messages').insert({
+      chat_id: selectedChatId,
+      sender_id: user.id,
+      content: `⚠️ הודעת מנהל האתר: ${adminNote.trim()}`,
+      is_read: false,
+    });
+    if (error) { setAdminNoteMsg('שגיאה: ' + error.message); return; }
+    setAdminNote('');
+    setAdminNoteMsg('✅ ההודעה נשלחה בשם המנהל וגלויה לשני הצדדים');
+    loadChatMessages(selectedChatId);
+  }
+
   if (!user || !isAdmin) return null;
 
   // ---- CODE VERIFICATION SCREEN ----
@@ -266,7 +314,8 @@ export default function AdminPage() {
                 : t === 'pending' ? `⏳ ממתינים (${allPosts.filter(p => p.status === 'pending').length})`
                 : t === 'admins' ? `🛡 ניהול מנהלים (${adminUsers.length})`
                 : t === 'site-control' ? `🔧 שליטת אתר`
-                : `🕵️ צפייה כמשתמש`}
+                : t === 'impersonate' ? `🕵️ צפייה כמשתמש`
+                : `📨 הודעות פרטיות (${chatList.length})`}
             </button>
           ))}
         </div>
@@ -605,6 +654,71 @@ export default function AdminPage() {
                         </div>
                       )}
                   </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ---- MESSAGES TAB (super admin only, READ-ONLY oversight) ---- */}
+        {activeTab === 'messages' && isSuperAdmin && (
+          <div>
+            <div className="card" style={{ padding: '1.5rem', marginBottom: '2rem' }}>
+              <h3 style={{ marginBottom: '0.5rem' }}>📨 צפייה בהודעות פרטיות</h3>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+                לבדיקת עמידה בחוקי האתר בלבד. בחר שיחה לצפייה בתוכן.
+              </p>
+              <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1.5rem' }}>
+                <select className="form-input" style={{ flex: 1, minWidth: 260 }}
+                  value={selectedChatId}
+                  onChange={e => loadChatMessages(e.target.value)}>
+                  <option value="">-- בחר שיחה --</option>
+                  {chatList.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.user_a_profile?.display_name} ↔ {c.user_b_profile?.display_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {chatMsgLoading && <div className="loading-page"><div className="spinner"></div></div>}
+
+              {!chatMsgLoading && selectedChatId && (
+                chatMessages.length === 0
+                  ? <p style={{ color: 'var(--text-muted)' }}>אין הודעות בשיחה זו</p>
+                  : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', maxHeight: 500, overflowY: 'auto', marginBottom: '1.5rem' }}>
+                      {chatMessages.map(m => (
+                        <div key={m.id} style={{
+                          background: m.content?.startsWith('⚠️ הודעת מנהל') ? 'rgba(239,68,68,0.1)' : 'var(--bg-secondary)',
+                          borderRadius: 'var(--radius-sm)', padding: '0.6rem 1rem',
+                          border: `1px solid ${m.content?.startsWith('⚠️ הודעת מנהל') ? 'rgba(239,68,68,0.3)' : 'var(--border)'}`
+                        }}>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>
+                            <strong>{m.sender?.display_name || '—'}</strong> · {new Date(m.created_at).toLocaleString('he-IL')}
+                          </div>
+                          <div style={{ color: 'var(--text-primary)' }}>{m.content}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )
+              )}
+
+              {selectedChatId && (
+                <div style={{ borderTop: '1px solid var(--border)', paddingTop: '1.5rem' }}>
+                  <label className="form-label" style={{ fontWeight: 600 }}>
+                    שלח הודעת מנהל גלויה (חתומה כ"הודעת מנהל האתר", נראית לשני הצדדים)
+                  </label>
+                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                    <input className="form-input" style={{ flex: 1 }}
+                      placeholder="תוכן ההודעה..."
+                      value={adminNote}
+                      onChange={e => setAdminNote(e.target.value)} />
+                    <button className="btn btn-primary" onClick={sendAdminNote} disabled={!adminNote.trim()}>
+                      📨 שלח
+                    </button>
+                  </div>
+                  {adminNoteMsg && <div className="alert alert-success" style={{ marginTop: '0.75rem' }}>{adminNoteMsg}</div>}
                 </div>
               )}
             </div>
