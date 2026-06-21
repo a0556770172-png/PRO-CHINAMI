@@ -73,7 +73,7 @@ vercel --prod
 ```
 khod-hachanit/
 ├── SUPABASE_SQL.sql        ← הרץ ראשון בסופאבייס
-├── public/
+├── public/ 
 │   └── index.html
 └── src/
     ├── App.js              ← ניתוב ראשי
