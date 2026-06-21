@@ -771,4 +771,4 @@ function PostsTable({ posts, onStatusChange, onDelete, isPending }) {
       </tbody>
     </table>
   );
-}
+} 
