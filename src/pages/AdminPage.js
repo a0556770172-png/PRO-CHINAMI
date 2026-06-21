@@ -316,7 +316,7 @@ export default function AdminPage() {
                 : t === 'admins' ? `🛡 ניהול מנהלים (${adminUsers.length})`
                 : t === 'site-control' ? `🔧 שליטת אתר`
                 : t === 'impersonate' ? `🕵️ צפייה כמשתמש`
-                : `📨 הודעות פרטיות (${chatList.length})`}
+                : `📨 טאצים (${chatList.length})`}
             </button>
           ))}
         </div>
@@ -665,7 +665,7 @@ export default function AdminPage() {
         {activeTab === 'messages' && isSuperAdmin && (
           <div>
             <div className="card" style={{ padding: '1.5rem', marginBottom: '2rem' }}>
-              <h3 style={{ marginBottom: '0.5rem' }}>📨 צפייה בהודעות פרטיות</h3>
+              <h3 style={{ marginBottom: '0.5rem' }}>📨 טאצים — צפייה והגבה</h3>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
                 לבדיקת עמידה בחוקי האתר בלבד. בחר שיחה לצפייה בתוכן.
               </p>
